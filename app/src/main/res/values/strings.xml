@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hari AutoLogin</string>
+    <string name="app_name">Hari Auto Login</string>
     <string name="app_subtitle">University of Hyderabad Wi-Fi • Automatic Login</string>
-    <string name="branding_footer">Designed and developed with ❤️ by Hari</string>
+    <string name="branding_footer">Designed and developed with 🤍 by Hari 🎀</string>
     
-    <string name="tile_label">Hari AutoLogin</string>
+    <string name="tile_label">Hari Auto Login</string>
     <string name="tile_logging_in">Logging in...</string>
     <string name="tile_online">Hari: Online</string>
     <string name="tile_offline">Hari: Offline</string>

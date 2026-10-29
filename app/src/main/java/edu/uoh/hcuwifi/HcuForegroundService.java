@@ -17,12 +17,13 @@ import android.util.Log;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Permanent zero-touch foreground service for HCU Wi-Fi auto-login.
- * 1. Binds process to Wi-Fi so HTTP requests never get misrouted to Mobile Data.
- * 2. Listens for Wi-Fi association events and triggers Sophos authentication automatically.
- * 3. Survives background memory reclamation via START_STICKY.
+ * Permanent zero-touch foreground service for Hari Auto Login.
+ * 1. Binds per-socket to Wi-Fi so HTTP requests never get misrouted to Mobile Data.
+ * 2. Listens for Wi-Fi association (onAvailable) and captive portal / session expiry (onCapabilitiesChanged).
+ * 3. Survives background memory reclamation via START_STICKY with minimal battery impact.
  */
 public class HcuForegroundService extends Service {
 
@@ -33,6 +34,7 @@ public class HcuForegroundService extends Service {
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final AtomicLong lastAttemptTime = new AtomicLong(0);
 
     public static void start(Context ctx) {
         if (ctx == null) return;
@@ -59,7 +61,7 @@ public class HcuForegroundService extends Service {
         createNotificationChannel();
         startForeground(NOTIF_ID, buildNotification("Monitoring HCU Wi-Fi (Auto-login active)"));
         registerWifiCallback();
-        Log.d(TAG, "Service created, Wi-Fi callback registered");
+        Log.d(TAG, "Hari Auto Login service active, listening for Wi-Fi & session expiry events");
     }
 
     @Override
@@ -81,22 +83,30 @@ public class HcuForegroundService extends Service {
             @Override
             public void onAvailable(Network network) {
                 Log.d(TAG, "Wi-Fi network available: " + network);
-
-                // CRITICAL: Force all sockets in this process to use this Wi-Fi network
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    connectivityManager.bindProcessToNetwork(network);
-                }
-
                 executor.execute(() -> performAutoLogin(network));
+            }
+
+            @Override
+            public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) {
+                if (caps == null) return;
+                boolean isCaptive = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL);
+                boolean isValidated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+
+                // Detect silent session expiry (e.g. idle timeout in library/hostel)
+                if (isCaptive || !isValidated) {
+                    long now = System.currentTimeMillis();
+                    if (now - lastAttemptTime.get() > 8000) {
+                        lastAttemptTime.set(now);
+                        Log.d(TAG, "Wi-Fi session expired or captive portal active. Re-authenticating...");
+                        executor.execute(() -> performAutoLogin(network));
+                    }
+                }
             }
 
             @Override
             public void onLost(Network network) {
                 Log.d(TAG, "Wi-Fi disconnected: " + network);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    connectivityManager.bindProcessToNetwork(null);
-                }
-                updateNotification("Wi-Fi disconnected. Waiting for HCU network...");
+                updateNotification("Wi-Fi disconnected. Waiting for campus Wi-Fi...");
             }
         };
 
@@ -109,42 +119,37 @@ public class HcuForegroundService extends Service {
 
     private void performAutoLogin(Network network) {
         try {
-            // Wait 2 seconds for DHCP lease to assign IP address
-            Thread.sleep(2000);
-
-            // Bind to Wi-Fi if network object is provided
-            if (network != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                connectivityManager.bindProcessToNetwork(network);
-            } else {
-                HcuAuthHelper.bindToWifi(this);
-            }
+            // Wait 1.5 seconds for DHCP lease to assign IP address
+            Thread.sleep(1500);
 
             String ip = HcuAuthHelper.getLocalWifiIpAddress(this);
             Log.d(TAG, "Active Wi-Fi IP: " + ip);
 
-            // Probe current status
-            if (HcuAuthHelper.isOnline()) {
+            // Probe internet status strictly over this Wi-Fi interface
+            if (HcuAuthHelper.isOnline(network, this)) {
                 Log.d(TAG, "Already online on Wi-Fi IP: " + ip);
-                updateNotification("✓ HCU Wi-Fi: Online (" + ip + ")");
+                updateNotification("✓ Hari Auto Login: Online (" + ip + ")");
                 return;
             }
 
             updateNotification("HCU Wi-Fi detected (" + ip + "), authenticating...");
 
-            // Execute login
-            HcuAuthHelper.AuthResult result = HcuAuthHelper.loginSync(this);
+            // Execute Wi-Fi bound login
+            HcuAuthHelper.AuthResult result = HcuAuthHelper.loginSync(this, network);
             Log.d(TAG, "Auto-login result: " + result);
 
             if (result.isSuccess()) {
-                updateNotification("✓ HCU Wi-Fi: Signed In (" + ip + ")");
+                updateNotification("✓ Hari Auto Login: Online (" + ip + ")");
+            } else if (result.status == HcuAuthHelper.AuthResult.Status.INVALID_CREDENTIALS) {
+                updateNotification("Hari Auto Login: Check username & password");
             } else {
-                // Retry once after 3 seconds
+                // Retry once after 3 seconds for transient gateway delays
                 Thread.sleep(3000);
-                HcuAuthHelper.AuthResult retry = HcuAuthHelper.loginSync(this);
+                HcuAuthHelper.AuthResult retry = HcuAuthHelper.loginSync(this, network);
                 if (retry.isSuccess()) {
-                    updateNotification("✓ HCU Wi-Fi: Signed In (Retry) (" + ip + ")");
+                    updateNotification("✓ Hari Auto Login: Online (Retry) (" + ip + ")");
                 } else {
-                    updateNotification("HCU Login: " + retry.message);
+                    updateNotification("Hari Auto Login: " + retry.message);
                 }
             }
 
@@ -160,10 +165,10 @@ public class HcuForegroundService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    "HCU Wi-Fi Auto-Login",
-                    NotificationManager.IMPORTANCE_LOW // Low priority, silent, no sound/vibration
+                    "Hari Auto Login Monitor",
+                    NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Monitors Wi-Fi connection and logs into HCU captive portal automatically");
+            channel.setDescription("Monitors campus Wi-Fi connection and logs into captive portal automatically");
             channel.setShowBadge(false);
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(channel);
@@ -183,7 +188,7 @@ public class HcuForegroundService extends Service {
         }
 
         return builder
-                .setContentTitle("HCU Wi-Fi")
+                .setContentTitle("Hari Auto Login")
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_wifi)
                 .setContentIntent(pendingIntent)
@@ -202,17 +207,13 @@ public class HcuForegroundService extends Service {
 
     @Override
     public void onDestroy() {
+        super.onDestroy();
         if (connectivityManager != null && networkCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
             } catch (Exception ignored) {}
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && connectivityManager != null) {
-            connectivityManager.bindProcessToNetwork(null);
-        }
-        executor.shutdown();
-        Log.d(TAG, "Service destroyed");
-        super.onDestroy();
+        executor.shutdownNow();
     }
 
     @Override

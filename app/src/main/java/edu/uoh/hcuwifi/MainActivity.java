@@ -72,7 +72,7 @@ public class MainActivity extends Activity {
             appendLog("Zero-intervention background service active.");
         }
 
-        appendLog("Hari AutoLogin started on " + Build.MANUFACTURER + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
+        appendLog("Hari Auto Login started on " + Build.MANUFACTURER + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
         HcuAuthHelper.bindToWifi(this);
         refreshStatus();
     }
@@ -252,7 +252,7 @@ public class MainActivity extends Activity {
         appendLog("Initiating login for user: " + u + "...");
         appendLog("Target gateway: " + HcuAuthHelper.PRIMARY_GATEWAY + ":" + HcuAuthHelper.PORT);
 
-        HcuAuthHelper.loginAsync(this, result -> {
+        HcuAuthHelper.loginAsync(this, null, u, p, result -> {
             setBusy(false);
             appendLog("Login response: " + result.toString());
             if (!result.rawResponse.isEmpty()) {

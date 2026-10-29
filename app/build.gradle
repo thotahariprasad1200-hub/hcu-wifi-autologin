@@ -10,8 +10,8 @@ android {
         applicationId "edu.uoh.hcuwifi"
         minSdk 24
         targetSdk 34
-        versionCode 3
-        versionName "1.2.0"
+        versionCode 4
+        versionName "1.3.0"
 
         testInstrumentationRunner "android.test.InstrumentationTestRunner"
     }
@@ -36,5 +36,5 @@ android {
 
 dependencies {
     // Ultra-lightweight: ZERO external dependencies (no androidx, no third-party libs)
-    // Runs on pure Android framework APIs for sub-100 KB APK footprint!
+    // Pure Android framework APIs + Keystore for sub-50 KB APK footprint!
 }
