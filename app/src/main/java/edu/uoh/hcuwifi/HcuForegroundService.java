@@ -17,13 +17,15 @@ import android.util.Log;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Permanent zero-touch foreground service for Hari Auto Login.
  * 1. Binds per-socket to Wi-Fi so HTTP requests never get misrouted to Mobile Data.
  * 2. Listens for Wi-Fi association (onAvailable) and captive portal / session expiry (onCapabilitiesChanged).
- * 3. Survives background memory reclamation via START_STICKY with minimal battery impact.
+ * 3. Runs a periodic 5-minute watchdog to recover from silent inactivity timeouts.
  */
 public class HcuForegroundService extends Service {
 
@@ -34,6 +36,7 @@ public class HcuForegroundService extends Service {
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final AtomicLong lastAttemptTime = new AtomicLong(0);
 
     public static void start(Context ctx) {
@@ -61,12 +64,13 @@ public class HcuForegroundService extends Service {
         createNotificationChannel();
         startForeground(NOTIF_ID, buildNotification("Monitoring HCU Wi-Fi (Auto-login active)"));
         registerWifiCallback();
+        startWatchdog();
         Log.d(TAG, "Hari Auto Login service active, listening for Wi-Fi & session expiry events");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Trigger immediate check in case Wi-Fi is already connected when service starts
+        // Immediate check when service starts
         executor.execute(() -> performAutoLogin(null));
         return START_STICKY;
     }
@@ -117,6 +121,26 @@ public class HcuForegroundService extends Service {
         }
     }
 
+    /**
+     * Periodic watchdog that checks connectivity every 5 minutes while connected to Wi-Fi.
+     * Recovers from firewall timeouts if Android fails to fire capability change callbacks.
+     */
+    private void startWatchdog() {
+        scheduler.scheduleWithFixedDelay(() -> {
+            try {
+                if (HcuAuthHelper.isWifiConnected(this)) {
+                    Network net = HcuAuthHelper.getWifiNetwork(this);
+                    if (!HcuAuthHelper.isOnline(net, this)) {
+                        Log.d(TAG, "Watchdog: Wi-Fi offline / unauthenticated. Re-authenticating...");
+                        performAutoLogin(net);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Watchdog check error: " + e.getMessage());
+            }
+        }, 2, 5, TimeUnit.MINUTES);
+    }
+
     private void performAutoLogin(Network network) {
         try {
             // Wait 1.5 seconds for DHCP lease to assign IP address
@@ -125,9 +149,10 @@ public class HcuForegroundService extends Service {
             String ip = HcuAuthHelper.getLocalWifiIpAddress(this);
             Log.d(TAG, "Active Wi-Fi IP: " + ip);
 
-            // Probe internet status strictly over this Wi-Fi interface
+            // Probe internet status strictly over Wi-Fi
             if (HcuAuthHelper.isOnline(network, this)) {
                 Log.d(TAG, "Already online on Wi-Fi IP: " + ip);
+                HcuAuthHelper.reportOnlineToAndroid(this, network);
                 updateNotification("✓ Hari Auto Login: Online (" + ip + ")");
                 return;
             }
@@ -139,15 +164,17 @@ public class HcuForegroundService extends Service {
             Log.d(TAG, "Auto-login result: " + result);
 
             if (result.isSuccess()) {
+                HcuAuthHelper.reportOnlineToAndroid(this, network);
                 updateNotification("✓ Hari Auto Login: Online (" + ip + ")");
             } else if (result.status == HcuAuthHelper.AuthResult.Status.INVALID_CREDENTIALS) {
-                updateNotification("Hari Auto Login: Check username & password");
+                updateNotification("Hari Auto Login: " + result.message);
             } else {
                 // Retry once after 3 seconds for transient gateway delays
                 Thread.sleep(3000);
                 HcuAuthHelper.AuthResult retry = HcuAuthHelper.loginSync(this, network);
                 if (retry.isSuccess()) {
-                    updateNotification("✓ Hari Auto Login: Online (Retry) (" + ip + ")");
+                    HcuAuthHelper.reportOnlineToAndroid(this, network);
+                    updateNotification("✓ Hari Auto Login: Online (" + ip + ")");
                 } else {
                     updateNotification("Hari Auto Login: " + retry.message);
                 }
@@ -213,6 +240,7 @@ public class HcuForegroundService extends Service {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
             } catch (Exception ignored) {}
         }
+        scheduler.shutdownNow();
         executor.shutdownNow();
     }
 

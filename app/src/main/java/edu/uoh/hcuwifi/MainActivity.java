@@ -2,13 +2,17 @@ package edu.uoh.hcuwifi;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -23,9 +27,9 @@ import java.util.Date;
 import java.util.Locale;
 
 /**
- * Pure Android Activity for Hari AutoLogin (HCU Wi-Fi management and diagnostics).
- * Designed and developed with ❤️ by Hari.
- * Uses zero external libraries (no androidx) for minimal RAM footprint and sub-100 KB APK.
+ * Pure Android Activity for Hari Auto Login (HCU Wi-Fi management and diagnostics).
+ * Designed and developed with 🤍 by Hari 🎀.
+ * Uses zero external libraries (no androidx) for minimal RAM footprint and sub-50 KB APK.
  */
 public class MainActivity extends Activity {
 
@@ -59,7 +63,7 @@ public class MainActivity extends Activity {
         setupListeners();
         setupNetworkCallback();
 
-        // Request notification permission on Android 13+ (API 33+) for silent foreground service
+        // Request notification permission on Android 13+ (API 33+)
         if (Build.VERSION.SDK_INT >= 33) {
             if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 101);
@@ -73,8 +77,21 @@ public class MainActivity extends Activity {
         }
 
         appendLog("Hari Auto Login started on " + Build.MANUFACTURER + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
+
+        // Check battery optimization for Realme 24/7 reliability
+        checkBatteryOptimization();
+
         HcuAuthHelper.bindToWifi(this);
         refreshStatus();
+    }
+
+    private void checkBatteryOptimization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                appendLog("[Note] For uninterrupted background auto-login on Realme/ColorOS, grant battery unrestricted access.");
+            }
+        }
     }
 
     @Override
@@ -127,7 +144,8 @@ public class MainActivity extends Activity {
                 HcuForegroundService.stop(this);
             }
             appendLog("Credentials saved. User: " + u + ", Auto-Login: " + auto);
-            Toast.makeText(this, "Settings saved!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Settings saved! Authenticating...", Toast.LENGTH_SHORT).show();
+            performLogin();
         });
 
         btnLogin.setOnClickListener(v -> performLogin());
@@ -154,10 +172,9 @@ public class MainActivity extends Activity {
             @Override
             public void onAvailable(Network network) {
                 runOnUiThread(() -> {
-                    appendLog("Wi-Fi network connected. Binding and checking status...");
+                    appendLog("Wi-Fi connected. Refreshing status...");
                     HcuAuthHelper.bindToWifi(MainActivity.this);
                     refreshStatus();
-                    // Auto-login if enabled
                     if (swAutoLogin.isChecked() && HcuAuthHelper.isConnectedToHcuSubnet(MainActivity.this)) {
                         appendLog("Auto-login triggered by Wi-Fi connection...");
                         performLogin();
@@ -213,6 +230,7 @@ public class MainActivity extends Activity {
             boolean inHcu = HcuAuthHelper.isHcuSubnet(ip);
 
             if (isOnline) {
+                HcuAuthHelper.reportOnlineToAndroid(this, null);
                 updateStatusDisplay(true, "Internet Active (HTTP 204 OK)", ip);
                 appendLog("[Status] Online. Subnet: " + (inHcu ? "HCU Campus" : "Other (" + ip + ")"));
             } else if (inHcu) {
@@ -247,6 +265,12 @@ public class MainActivity extends Activity {
             return;
         }
 
+        // Auto-save so background service always has current valid credentials
+        HcuAuthHelper.saveConfig(this, u, p, swAutoLogin.isChecked());
+        if (swAutoLogin.isChecked()) {
+            HcuForegroundService.start(this);
+        }
+
         HcuAuthHelper.bindToWifi(this);
         setBusy(true);
         appendLog("Initiating login for user: " + u + "...");
@@ -261,6 +285,7 @@ public class MainActivity extends Activity {
 
             String currentIp = HcuAuthHelper.getLocalWifiIpAddress(this);
             if (result.isSuccess()) {
+                HcuAuthHelper.reportOnlineToAndroid(this, null);
                 Toast.makeText(this, "Success: " + result.message, Toast.LENGTH_SHORT).show();
                 updateStatusDisplay(true, "Signed in successfully!", currentIp);
             } else {

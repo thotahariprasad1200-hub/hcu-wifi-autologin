@@ -10,21 +10,31 @@ android {
         applicationId "edu.uoh.hcuwifi"
         minSdk 24
         targetSdk 34
-        versionCode 4
-        versionName "1.3.0"
+        versionCode 5
+        versionName "1.3.1"
 
         testInstrumentationRunner "android.test.InstrumentationTestRunner"
     }
 
+    signingConfigs {
+        release {
+            storeFile file('hcuwifi.keystore')
+            storePassword 'hcuwifi_keystore_pwd'
+            keyAlias 'hcuwifi'
+            keyPassword 'hcuwifi_keystore_pwd'
+        }
+    }
+
     buildTypes {
         release {
-            minifyEnabled true
-            shrinkResources true
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug {
+            signingConfig signingConfigs.release
             minifyEnabled false
-            applicationIdSuffix ".debug"
         }
     }
 
