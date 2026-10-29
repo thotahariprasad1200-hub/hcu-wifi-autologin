@@ -54,7 +54,7 @@ public class HcuTileService extends TileService {
         Tile tile = getQsTile();
         if (tile == null) return;
 
-        HcuAuthHelper.probeAsync(result -> {
+        HcuAuthHelper.probeAsync(this, result -> {
             Tile currentTile = getQsTile();
             if (currentTile == null) return;
 

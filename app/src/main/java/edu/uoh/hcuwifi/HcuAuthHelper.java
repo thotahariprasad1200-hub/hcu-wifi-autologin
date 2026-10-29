@@ -3,7 +3,13 @@ package edu.uoh.hcuwifi;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
+import android.net.RouteInfo;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -13,13 +19,18 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -40,9 +51,9 @@ public final class HcuAuthHelper {
     // Connectivity probe endpoint (Google captive portal probe)
     public static final String PROBE_URL = "http://connectivitycheck.gstatic.com/generate_204";
 
-    // Default Credentials
-    public static final String DEFAULT_USERNAME = "26mnms10";
-    public static final String DEFAULT_PASSWORD = "01smnm6230102025@#dP";
+    // Default Credentials (empty for fresh installs so any student can enter their own credentials)
+    public static final String DEFAULT_USERNAME = "";
+    public static final String DEFAULT_PASSWORD = "";
 
     // SharedPreferences Config
     public static final String PREFS_NAME = "hcu_wifi_prefs";
@@ -119,23 +130,102 @@ public final class HcuAuthHelper {
     }
 
     /**
-     * Determines whether the active network is connected to Wi-Fi.
+     * Binds all sockets from this application strictly to the Wi-Fi interface.
+     * Prevents Android from routing HTTP traffic over Cellular Mobile Data (4G/5G).
+     */
+    public static boolean bindToWifi(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && context != null) {
+            try {
+                ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    for (Network net : cm.getAllNetworks()) {
+                        NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                        if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                            cm.bindProcessToNetwork(net);
+                            Log.d(TAG, "Process successfully bound to Wi-Fi: " + net);
+                            return true;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to bind to Wi-Fi: " + e.getMessage());
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Checks if Wi-Fi network is currently connected.
      */
     public static boolean isWifiConnected(Context context) {
-        try {
-            ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm == null) return false;
-            NetworkInfo active = cm.getActiveNetworkInfo();
-            return active != null && active.isConnected() && active.getType() == ConnectivityManager.TYPE_WIFI;
-        } catch (Exception e) {
-            Log.e(TAG, "Error checking Wi-Fi connection", e);
-            return false;
+        ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) return false;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Network net = cm.getActiveNetwork();
+            if (net == null) {
+                // Check all networks in case active network is cellular while Wi-Fi is captive
+                for (Network n : cm.getAllNetworks()) {
+                    NetworkCapabilities c = cm.getNetworkCapabilities(n);
+                    if (c != null && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return true;
+                }
+                return false;
+            }
+            NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+            return caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+        } else {
+            NetworkInfo info = cm.getActiveNetworkInfo();
+            return info != null && info.isConnected() && info.getType() == ConnectivityManager.TYPE_WIFI;
         }
     }
 
     /**
-     * Gets the device's local IPv4 address across all active network interfaces.
+     * Gets the Wi-Fi IPv4 address specifically, ignoring cellular (rmnet) interfaces.
      */
+    public static String getLocalWifiIpAddress(Context context) {
+        if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    for (Network net : cm.getAllNetworks()) {
+                        NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                        if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                            LinkProperties lp = cm.getLinkProperties(net);
+                            if (lp != null) {
+                                for (LinkAddress la : lp.getLinkAddresses()) {
+                                    InetAddress addr = la.getAddress();
+                                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                                        return addr.getHostAddress();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Error getting Wi-Fi IP via ConnectivityManager: " + e.getMessage());
+            }
+        }
+
+        // Fallback: iterate interfaces prioritizing wlan/ap
+        try {
+            List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
+            for (NetworkInterface intf : interfaces) {
+                if (intf.isLoopback() || !intf.isUp()) continue;
+                String name = intf.getName().toLowerCase(Locale.US);
+                if (!name.contains("wlan") && !name.contains("ap")) continue;
+                List<InetAddress> addrs = Collections.list(intf.getInetAddresses());
+                for (InetAddress addr : addrs) {
+                    if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
+                        return addr.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        return getLocalIpAddress();
+    }
+
     public static String getLocalIpAddress() {
         try {
             List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
@@ -143,12 +233,8 @@ public final class HcuAuthHelper {
                 if (intf.isLoopback() || !intf.isUp()) continue;
                 List<InetAddress> addrs = Collections.list(intf.getInetAddresses());
                 for (InetAddress addr : addrs) {
-                    if (!addr.isLoopbackAddress()) {
-                        String sAddr = addr.getHostAddress();
-                        if (sAddr != null && sAddr.indexOf(':') < 0) {
-                            // IPv4 address found
-                            return sAddr;
-                        }
+                    if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
+                        return addr.getHostAddress();
                     }
                 }
             }
@@ -159,24 +245,55 @@ public final class HcuAuthHelper {
     }
 
     /**
-     * Checks if given IP matches HCU Subnet pattern (10.4.*.*).
+     * Resolves the default router / gateway IP assigned to the Wi-Fi connection.
+     */
+    public static String getWifiGatewayIp(Context context) {
+        if (context == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null;
+        try {
+            ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                for (Network net : cm.getAllNetworks()) {
+                    NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                    if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        LinkProperties lp = cm.getLinkProperties(net);
+                        if (lp != null) {
+                            for (RouteInfo route : lp.getRoutes()) {
+                                if (route.isDefaultRoute() && route.getGateway() != null) {
+                                    String gw = route.getGateway().getHostAddress();
+                                    if (gw != null && !gw.equals("0.0.0.0")) {
+                                        return gw;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Error resolving Wi-Fi gateway: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Checks if given IP matches any HCU campus subnet (10.*.*.* or 192.168.56.*).
      */
     public static boolean isHcuSubnet(String ip) {
         return ip != null && (ip.startsWith("10.") || ip.startsWith("192.168.56."));
     }
 
-    /**
-     * Checks if current device IP is in the HCU Wi-Fi subnet.
-     */
-    public static boolean isConnectedToHcuSubnet() {
-        String ip = getLocalIpAddress();
+    public static boolean isConnectedToHcuSubnet(Context context) {
+        String ip = getLocalWifiIpAddress(context);
         return isHcuSubnet(ip);
+    }
+
+    public static boolean isConnectedToHcuSubnet() {
+        return isHcuSubnet(getLocalIpAddress());
     }
 
     /**
      * Probes Google's generate_204 endpoint to verify internet connectivity.
-     * Plain HTTP is used; captive portals intercept or redirect this request.
-     * Returns true if genuine HTTP 204 No Content is received.
+     * Note: Plain HTTP is used; captive portals intercept or redirect this request.
      */
     public static boolean isOnline() {
         HttpURLConnection conn = null;
@@ -200,55 +317,59 @@ public final class HcuAuthHelper {
         }
     }
 
-    /**
-     * Synchronous probe returning an AuthResult.
-     */
-    public static AuthResult probeConnectivity() {
-        String ip = getLocalIpAddress();
+    public static AuthResult probeConnectivity(Context context) {
+        bindToWifi(context);
+        String ip = getLocalWifiIpAddress(context);
         boolean inHcu = isHcuSubnet(ip);
         boolean online = isOnline();
 
         if (online) {
             return new AuthResult(AuthResult.Status.ALREADY_ONLINE,
-                    "Online (HTTP 204 OK) - Local IP: " + ip, null, null);
+                    "Online (HTTP 204 OK) - Wi-Fi IP: " + ip, null, null);
         } else if (inHcu) {
             return new AuthResult(AuthResult.Status.NOT_IN_HCU_SUBNET,
-                    "Captive Portal Login Required (Subnet 10.4.*.* detected, IP: " + ip + ")", null, null);
+                    "Captive Portal Login Required (IP: " + ip + ")", null, null);
         } else {
             return new AuthResult(AuthResult.Status.NOT_IN_HCU_SUBNET,
-                    "Not in HCU Subnet (Local IP: " + ip + ")", null, null);
+                    "Wi-Fi Connected (IP: " + ip + ") - Portal authentication needed", null, null);
         }
     }
 
     /**
-     * Synchronous login routine.
-     * 1. Checks if already online.
-     * 2. Encodes credentials (URL-encoding special characters like @, #).
-     * 3. Sends POST to primary gateway (192.168.56.2:8090).
-     * 4. Fails over to fallback gateway (10.4.0.1:8090) if primary times out.
-     * 5. Parses response and re-probes connectivity.
+     * Primary synchronous login pipeline.
+     * 1. Binds process to Wi-Fi so traffic never leaks through cellular mobile data.
+     * 2. Sends HTTP POST to primary gateway (192.168.56.2:8090).
+     * 3. Falls back to 10.4.0.1:8090 and dynamic router gateway if needed.
+     * 4. Treats "LIVE", "successfully logged in", and "Maximum login limit" as success.
      */
     public static AuthResult loginSync(Context context) {
+        bindToWifi(context);
         String username = getSavedUsername(context);
         String password = getSavedPassword(context);
-        return loginSync(username, password);
-    }
 
-    public static AuthResult loginSync(String username, String password) {
-        // Fast path: already authenticated
-        if (isOnline()) {
-            return new AuthResult(AuthResult.Status.ALREADY_ONLINE,
-                    "Already signed in and online", null, null);
+        Set<String> gatewaysToTry = new LinkedHashSet<>();
+        gatewaysToTry.add(PRIMARY_GATEWAY);
+        gatewaysToTry.add(FALLBACK_GATEWAY);
+
+        String dynamicGw = getWifiGatewayIp(context);
+        if (dynamicGw != null && !dynamicGw.isEmpty()) {
+            gatewaysToTry.add(dynamicGw);
         }
 
-        String[] gateways = new String[]{PRIMARY_GATEWAY, FALLBACK_GATEWAY};
         String lastError = "";
 
-        for (String gateway : gateways) {
+        for (String gateway : gatewaysToTry) {
             try {
+                Log.d(TAG, "Attempting login against gateway: " + gateway + ":" + PORT);
                 AuthResult res = executeAuthRequest(gateway, username, password, true);
-                if (res != null) {
+                if (res != null && res.isSuccess()) {
                     return res;
+                }
+                if (res != null && res.status == AuthResult.Status.INVALID_CREDENTIALS) {
+                    return res;
+                }
+                if (res != null) {
+                    lastError = res.message;
                 }
             } catch (Exception e) {
                 lastError = e.getMessage();
@@ -256,26 +377,26 @@ public final class HcuAuthHelper {
             }
         }
 
-        // Final check in case connection succeeded despite HTTP status quirks
+        // Final verification check
         if (isOnline()) {
             return new AuthResult(AuthResult.Status.SUCCESS,
                     "Login verified via internet probe (204 OK)", null, PRIMARY_GATEWAY);
         }
 
         return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
-                "Both gateways (192.168.56.2 & 10.4.0.1) unreachable: " + lastError, null, null);
+                "Could not reach Sophos portal (tried: " + gatewaysToTry + "): " + lastError, null, null);
     }
 
-    /**
-     * Synchronous logout routine.
-     */
     public static AuthResult logoutSync(Context context) {
+        bindToWifi(context);
         String username = getSavedUsername(context);
-        return logoutSync(username);
-    }
 
-    public static AuthResult logoutSync(String username) {
-        String[] gateways = new String[]{PRIMARY_GATEWAY, FALLBACK_GATEWAY};
+        Set<String> gateways = new LinkedHashSet<>();
+        gateways.add(PRIMARY_GATEWAY);
+        gateways.add(FALLBACK_GATEWAY);
+        String dynamicGw = getWifiGatewayIp(context);
+        if (dynamicGw != null) gateways.add(dynamicGw);
+
         for (String gateway : gateways) {
             try {
                 AuthResult res = executeAuthRequest(gateway, username, "", false);
@@ -292,7 +413,6 @@ public final class HcuAuthHelper {
 
     /**
      * Executes the HTTP POST request to Sophos captive portal endpoint.
-     * Note: Plain HTTP on port 8090 is strictly required (HTTPS causes 502).
      */
     private static AuthResult executeAuthRequest(String gatewayIp, String username, String password, boolean isLogin) throws Exception {
         String targetUrl = "http://" + gatewayIp + ":" + PORT + AUTH_PATH;
@@ -304,12 +424,13 @@ public final class HcuAuthHelper {
             conn.setDoOutput(true);
             conn.setDoInput(true);
             conn.setUseCaches(false);
-            conn.setConnectTimeout(4000);
-            conn.setReadTimeout(4000);
+            conn.setConnectTimeout(3500);
+            conn.setReadTimeout(3500);
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+            conn.setRequestProperty("Referer", targetUrl);
+            conn.setRequestProperty("Origin", "http://" + gatewayIp + ":" + PORT);
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; rv:109.0) Gecko/109.0 Firefox/119.0");
 
-            // Build POST payload with proper URL encoding for special characters
             long timestamp = System.currentTimeMillis();
             StringBuilder body = new StringBuilder();
             if (isLogin) {
@@ -347,34 +468,44 @@ public final class HcuAuthHelper {
                 }
             }
 
-            Log.d(TAG, "Portal response (" + responseCode + "): " + responseBody);
+            Log.d(TAG, "Portal response (" + responseCode + ") from " + gatewayIp + ": " + responseBody);
 
             if (isLogin) {
-                // Check response tokens
-                if (responseBody.contains("You are signed in") ||
-                    responseBody.contains("signed in") ||
-                    responseBody.contains("<status>LIVE</status>") ||
-                    responseBody.contains("LIVE") ||
-                    responseBody.contains("Login Successful")) {
+                String lower = responseBody.toLowerCase(Locale.US);
+
+                // Success tokens matching Sophos XG / Cyberoam firmware
+                if (lower.contains("live") ||
+                    lower.contains("you are signed in") ||
+                    lower.contains("successfully logged in") ||
+                    lower.contains("login successful") ||
+                    lower.contains("status>live")) {
                     return new AuthResult(AuthResult.Status.SUCCESS, "Signed in successfully!", responseBody, gatewayIp);
-                } else if (responseBody.contains("Invalid username or password") ||
-                           responseBody.contains("Authentication failed") ||
-                           responseBody.contains("Credentials")) {
+                }
+
+                // Session already active / maximum login limit reached
+                if (lower.contains("maximum login limit") || lower.contains("maximum login")) {
+                    return new AuthResult(AuthResult.Status.SUCCESS, "Session active (Maximum login limit).", responseBody, gatewayIp);
+                }
+
+                if (lower.contains("invalid username or password") ||
+                    lower.contains("authentication failed") ||
+                    lower.contains("wrong username")) {
                     return new AuthResult(AuthResult.Status.INVALID_CREDENTIALS,
-                            "Invalid HCU credentials. Please check username/password.", responseBody, gatewayIp);
-                } else if (responseBody.contains("Maximum Login Limit") || responseBody.contains("data transfer has been exceeded")) {
+                            "Invalid credentials: Check username & password", responseBody, gatewayIp);
+                }
+
+                if (lower.contains("data transfer has been exceeded")) {
                     return new AuthResult(AuthResult.Status.ERROR,
-                            "HCU Portal Error: Quota or session limit reached.", responseBody, gatewayIp);
+                            "HCU Portal Error: Data quota exceeded", responseBody, gatewayIp);
                 }
 
-                // If response wasn't conclusive, test connectivity probe
-                if (isOnline()) {
-                    return new AuthResult(AuthResult.Status.SUCCESS, "Signed in successfully (probe verified)!", responseBody, gatewayIp);
+                // If response code is 200 and probe passes, consider success
+                if (responseCode == 200 && isOnline()) {
+                    return new AuthResult(AuthResult.Status.SUCCESS, "Signed in (HTTP 200 confirmed)!", responseBody, gatewayIp);
                 }
 
-                return new AuthResult(AuthResult.Status.ERROR, "Unexpected portal response: " + responseCode, responseBody, gatewayIp);
+                return new AuthResult(AuthResult.Status.ERROR, "Portal response code: " + responseCode, responseBody, gatewayIp);
             } else {
-                // Logout response
                 return new AuthResult(AuthResult.Status.SUCCESS, "Logged out successfully.", responseBody, gatewayIp);
             }
 
@@ -383,9 +514,6 @@ public final class HcuAuthHelper {
         }
     }
 
-    /**
-     * Asynchronous login on background executor, delivers result on UI thread.
-     */
     public static void loginAsync(Context context, AuthCallback callback) {
         EXECUTOR.execute(() -> {
             AuthResult result = loginSync(context);
@@ -395,9 +523,6 @@ public final class HcuAuthHelper {
         });
     }
 
-    /**
-     * Asynchronous logout on background executor, delivers result on UI thread.
-     */
     public static void logoutAsync(Context context, AuthCallback callback) {
         EXECUTOR.execute(() -> {
             AuthResult result = logoutSync(context);
@@ -407,12 +532,9 @@ public final class HcuAuthHelper {
         });
     }
 
-    /**
-     * Asynchronous connectivity probe on background executor, delivers result on UI thread.
-     */
-    public static void probeAsync(AuthCallback callback) {
+    public static void probeAsync(Context context, AuthCallback callback) {
         EXECUTOR.execute(() -> {
-            AuthResult result = probeConnectivity();
+            AuthResult result = probeConnectivity(context);
             MAIN_HANDLER.post(() -> {
                 if (callback != null) callback.onComplete(result);
             });

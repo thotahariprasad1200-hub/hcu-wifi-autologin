@@ -23,7 +23,8 @@ import java.util.Date;
 import java.util.Locale;
 
 /**
- * Pure Android Activity for HCU Wi-Fi management and diagnostics.
+ * Pure Android Activity for Hari AutoLogin (HCU Wi-Fi management and diagnostics).
+ * Designed and developed with ❤️ by Hari.
  * Uses zero external libraries (no androidx) for minimal RAM footprint and sub-100 KB APK.
  */
 public class MainActivity extends Activity {
@@ -71,7 +72,15 @@ public class MainActivity extends Activity {
             appendLog("Zero-intervention background service active.");
         }
 
-        appendLog("HCU Wi-Fi Helper started on " + Build.MANUFACTURER + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
+        appendLog("Hari AutoLogin started on " + Build.MANUFACTURER + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
+        HcuAuthHelper.bindToWifi(this);
+        refreshStatus();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        HcuAuthHelper.bindToWifi(this);
         refreshStatus();
     }
 
@@ -145,10 +154,11 @@ public class MainActivity extends Activity {
             @Override
             public void onAvailable(Network network) {
                 runOnUiThread(() -> {
-                    appendLog("Wi-Fi network connected. Refreshing status...");
+                    appendLog("Wi-Fi network connected. Binding and checking status...");
+                    HcuAuthHelper.bindToWifi(MainActivity.this);
                     refreshStatus();
                     // Auto-login if enabled
-                    if (swAutoLogin.isChecked() && HcuAuthHelper.isConnectedToHcuSubnet()) {
+                    if (swAutoLogin.isChecked() && HcuAuthHelper.isConnectedToHcuSubnet(MainActivity.this)) {
                         appendLog("Auto-login triggered by Wi-Fi connection...");
                         performLogin();
                     }
@@ -193,9 +203,10 @@ public class MainActivity extends Activity {
 
     private void refreshStatus() {
         setBusy(true);
-        HcuAuthHelper.probeAsync(result -> {
+        HcuAuthHelper.bindToWifi(this);
+        HcuAuthHelper.probeAsync(this, result -> {
             setBusy(false);
-            String ip = HcuAuthHelper.getLocalIpAddress();
+            String ip = HcuAuthHelper.getLocalWifiIpAddress(this);
             tvLocalIp.setText(ip);
 
             boolean isOnline = (result.status == HcuAuthHelper.AuthResult.Status.ALREADY_ONLINE);
@@ -203,7 +214,7 @@ public class MainActivity extends Activity {
 
             if (isOnline) {
                 updateStatusDisplay(true, "Internet Active (HTTP 204 OK)", ip);
-                appendLog("[Status] Online. Subnet: " + (inHcu ? "HCU 10.4.*.*" : "Other (" + ip + ")"));
+                appendLog("[Status] Online. Subnet: " + (inHcu ? "HCU Campus" : "Other (" + ip + ")"));
             } else if (inHcu) {
                 updateStatusDisplay(false, "HCU Subnet Detected - Login Required", ip);
                 appendLog("[Status] Offline on HCU Wi-Fi (IP: " + ip + "). Ready to login.");
@@ -236,6 +247,7 @@ public class MainActivity extends Activity {
             return;
         }
 
+        HcuAuthHelper.bindToWifi(this);
         setBusy(true);
         appendLog("Initiating login for user: " + u + "...");
         appendLog("Target gateway: " + HcuAuthHelper.PRIMARY_GATEWAY + ":" + HcuAuthHelper.PORT);
@@ -247,12 +259,13 @@ public class MainActivity extends Activity {
                 appendLog("Portal snippet: " + truncate(result.rawResponse, 120));
             }
 
+            String currentIp = HcuAuthHelper.getLocalWifiIpAddress(this);
             if (result.isSuccess()) {
                 Toast.makeText(this, "Success: " + result.message, Toast.LENGTH_SHORT).show();
-                updateStatusDisplay(true, "Signed in successfully!", HcuAuthHelper.getLocalIpAddress());
+                updateStatusDisplay(true, "Signed in successfully!", currentIp);
             } else {
                 Toast.makeText(this, "Failed: " + result.message, Toast.LENGTH_LONG).show();
-                updateStatusDisplay(false, result.message, HcuAuthHelper.getLocalIpAddress());
+                updateStatusDisplay(false, result.message, currentIp);
             }
         });
     }

@@ -322,5 +322,17 @@
             </ScrollView>
         </LinearLayout>
 
+        <!-- Branding Footer -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/branding_footer"
+            android:gravity="center"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="@color/accent"
+            android:paddingTop="12dp"
+            android:paddingBottom="24dp" />
+
     </LinearLayout>
 </ScrollView>

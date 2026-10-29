@@ -19,10 +19,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Lightweight foreground service that survives Realme UI background kills.
- * Registers a NetworkCallback that fires ONLY when Wi-Fi connects/disconnects.
- * Zero polling, zero wake locks, zero CPU when idle.
- * The persistent notification is the trade-off Android 12/13 requires for background survival.
+ * Permanent zero-touch foreground service for HCU Wi-Fi auto-login.
+ * 1. Binds process to Wi-Fi so HTTP requests never get misrouted to Mobile Data.
+ * 2. Listens for Wi-Fi association events and triggers Sophos authentication automatically.
+ * 3. Survives background memory reclamation via START_STICKY.
  */
 public class HcuForegroundService extends Service {
 
@@ -35,15 +35,21 @@ public class HcuForegroundService extends Service {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     public static void start(Context ctx) {
+        if (ctx == null) return;
         Intent intent = new Intent(ctx, HcuForegroundService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ctx.startForegroundService(intent);
-        } else {
-            ctx.startService(intent);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ctx.startForegroundService(intent);
+            } else {
+                ctx.startService(intent);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error starting HcuForegroundService: " + e.getMessage());
         }
     }
 
     public static void stop(Context ctx) {
+        if (ctx == null) return;
         ctx.stopService(new Intent(ctx, HcuForegroundService.class));
     }
 
@@ -51,13 +57,21 @@ public class HcuForegroundService extends Service {
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        startForeground(NOTIF_ID, buildNotification("Monitoring HCU Wi-Fi..."));
+        startForeground(NOTIF_ID, buildNotification("Monitoring HCU Wi-Fi (Auto-login active)"));
         registerWifiCallback();
-        Log.d(TAG, "Service created, NetworkCallback registered");
+        Log.d(TAG, "Service created, Wi-Fi callback registered");
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        // Trigger immediate check in case Wi-Fi is already connected when service starts
+        executor.execute(() -> performAutoLogin(null));
+        return START_STICKY;
     }
 
     private void registerWifiCallback() {
         connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) return;
 
         NetworkRequest request = new NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
@@ -66,62 +80,90 @@ public class HcuForegroundService extends Service {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(Network network) {
-                Log.d(TAG, "Wi-Fi connected, triggering auto-login pipeline...");
-                executor.execute(() -> {
-                    try {
-                        // Wait for DHCP to assign IP
-                        Thread.sleep(3000);
+                Log.d(TAG, "Wi-Fi network available: " + network);
 
-                        String ip = HcuAuthHelper.getLocalIpAddress();
-                        if (ip == null || !HcuAuthHelper.isHcuSubnet(ip)) {
-                            Log.d(TAG, "Not HCU subnet: " + ip);
-                            updateNotification("Wi-Fi connected (" + ip + ") — not HCU");
-                            return;
-                        }
+                // CRITICAL: Force all sockets in this process to use this Wi-Fi network
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    connectivityManager.bindProcessToNetwork(network);
+                }
 
-                        Log.d(TAG, "HCU subnet detected: " + ip + ", authenticating...");
-                        updateNotification("HCU detected (" + ip + "), logging in...");
-
-                        HcuAuthHelper.AuthResult result = HcuAuthHelper.loginSync(
-                                HcuForegroundService.this);
-
-                        if (result.isSuccess()) {
-                            updateNotification("✓ HCU Wi-Fi: Online (" + ip + ")");
-                        } else {
-                            // Retry once after 5 seconds
-                            Thread.sleep(5000);
-                            HcuAuthHelper.AuthResult retry = HcuAuthHelper.loginSync(
-                                    HcuForegroundService.this);
-                            if (retry.isSuccess()) {
-                                updateNotification("✓ HCU Wi-Fi: Online (retry) (" + ip + ")");
-                            } else {
-                                updateNotification("✗ Login failed: " + retry.message);
-                            }
-                        }
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                });
+                executor.execute(() -> performAutoLogin(network));
             }
 
             @Override
             public void onLost(Network network) {
-                Log.d(TAG, "Wi-Fi disconnected");
-                updateNotification("Wi-Fi disconnected. Waiting...");
+                Log.d(TAG, "Wi-Fi disconnected: " + network);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    connectivityManager.bindProcessToNetwork(null);
+                }
+                updateNotification("Wi-Fi disconnected. Waiting for HCU network...");
             }
         };
 
-        connectivityManager.registerNetworkCallback(request, networkCallback);
+        try {
+            connectivityManager.registerNetworkCallback(request, networkCallback);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to register network callback", e);
+        }
+    }
+
+    private void performAutoLogin(Network network) {
+        try {
+            // Wait 2 seconds for DHCP lease to assign IP address
+            Thread.sleep(2000);
+
+            // Bind to Wi-Fi if network object is provided
+            if (network != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                connectivityManager.bindProcessToNetwork(network);
+            } else {
+                HcuAuthHelper.bindToWifi(this);
+            }
+
+            String ip = HcuAuthHelper.getLocalWifiIpAddress(this);
+            Log.d(TAG, "Active Wi-Fi IP: " + ip);
+
+            // Probe current status
+            if (HcuAuthHelper.isOnline()) {
+                Log.d(TAG, "Already online on Wi-Fi IP: " + ip);
+                updateNotification("✓ HCU Wi-Fi: Online (" + ip + ")");
+                return;
+            }
+
+            updateNotification("HCU Wi-Fi detected (" + ip + "), authenticating...");
+
+            // Execute login
+            HcuAuthHelper.AuthResult result = HcuAuthHelper.loginSync(this);
+            Log.d(TAG, "Auto-login result: " + result);
+
+            if (result.isSuccess()) {
+                updateNotification("✓ HCU Wi-Fi: Signed In (" + ip + ")");
+            } else {
+                // Retry once after 3 seconds
+                Thread.sleep(3000);
+                HcuAuthHelper.AuthResult retry = HcuAuthHelper.loginSync(this);
+                if (retry.isSuccess()) {
+                    updateNotification("✓ HCU Wi-Fi: Signed In (Retry) (" + ip + ")");
+                } else {
+                    updateNotification("HCU Login: " + retry.message);
+                }
+            }
+
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            Log.e(TAG, "Error in performAutoLogin", e);
+            updateNotification("Login check failed: " + e.getMessage());
+        }
     }
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    "HCU Wi-Fi Monitor",
-                    NotificationManager.IMPORTANCE_MIN  // Silent, no sound, no vibration
+                    "HCU Wi-Fi Auto-Login",
+                    NotificationManager.IMPORTANCE_LOW // Low priority, silent, no sound/vibration
             );
-            channel.setDescription("Monitors Wi-Fi and auto-logs into HCU captive portal");
+            channel.setDescription("Monitors Wi-Fi connection and logs into HCU captive portal automatically");
             channel.setShowBadge(false);
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(channel);
@@ -152,15 +194,23 @@ public class HcuForegroundService extends Service {
     private void updateNotification(String text) {
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager != null) {
-            manager.notify(NOTIF_ID, buildNotification(text));
+            try {
+                manager.notify(NOTIF_ID, buildNotification(text));
+            } catch (Exception ignored) {}
         }
     }
 
     @Override
     public void onDestroy() {
         if (connectivityManager != null && networkCallback != null) {
-            connectivityManager.unregisterNetworkCallback(networkCallback);
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (Exception ignored) {}
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && connectivityManager != null) {
+            connectivityManager.bindProcessToNetwork(null);
+        }
+        executor.shutdown();
         Log.d(TAG, "Service destroyed");
         super.onDestroy();
     }
