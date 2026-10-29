@@ -58,6 +58,19 @@ public class MainActivity extends Activity {
         setupListeners();
         setupNetworkCallback();
 
+        // Request notification permission on Android 13+ (API 33+) for silent foreground service
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 101);
+            }
+        }
+
+        // Start permanent background service if auto-login is enabled
+        if (HcuAuthHelper.isAutoLoginEnabled(this)) {
+            HcuForegroundService.start(this);
+            appendLog("Zero-intervention background service active.");
+        }
+
         appendLog("HCU Wi-Fi Helper started on " + Build.MANUFACTURER + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
         refreshStatus();
     }
@@ -99,6 +112,11 @@ public class MainActivity extends Activity {
             }
 
             HcuAuthHelper.saveConfig(this, u, p, auto);
+            if (auto) {
+                HcuForegroundService.start(this);
+            } else {
+                HcuForegroundService.stop(this);
+            }
             appendLog("Credentials saved. User: " + u + ", Auto-Login: " + auto);
             Toast.makeText(this, "Settings saved!", Toast.LENGTH_SHORT).show();
         });
