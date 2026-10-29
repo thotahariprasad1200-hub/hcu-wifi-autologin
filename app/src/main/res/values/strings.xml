@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HCU Wi-Fi</string>
+    <string name="app_subtitle">Ultra-Lightweight Auto-Login (Sub-100 KB)</string>
+    
+    <string name="tile_label">HCU Wi-Fi</string>
+    <string name="tile_logging_in">Connecting...</string>
+    <string name="tile_online">HCU: Online</string>
+    <string name="tile_offline">HCU: Offline</string>
+
+    <string name="status_title">Connection Status</string>
+    <string name="status_checking">Checking connection...</string>
+    <string name="status_online_text">Online (Internet Active)</string>
+    <string name="status_offline_text">Offline (Login Required)</string>
+    <string name="status_not_hcu">Not on HCU Wi-Fi (Subnet 10.4.*.*)</string>
+
+    <string name="ip_label">Local IP:</string>
+    <string name="gateway_label">Sophos Gateway:</string>
+    <string name="gateway_val">192.168.56.2:8090</string>
+
+    <string name="credentials_title">HCU Sophos Credentials</string>
+    <string name="username_hint">HCU Username (e.g. 26mnms10)</string>
+    <string name="password_hint">HCU Password</string>
+    <string name="save_credentials">Save Credentials</string>
+    <string name="auto_login_label">Auto-Login when connected to HCU Wi-Fi</string>
+
+    <string name="btn_login">Login Now</string>
+    <string name="btn_logout">Logout</string>
+    <string name="btn_probe">Test Connectivity</string>
+
+    <string name="log_title">Diagnostic Log</string>
+    <string name="btn_clear_log">Clear Log</string>
+</resources>

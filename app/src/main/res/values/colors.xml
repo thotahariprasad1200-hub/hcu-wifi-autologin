@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#1E3A8A</color>
+    <color name="primary_dark">#0F172A</color>
+    <color name="accent">#2563EB</color>
+    <color name="bg_main">#F1F5F9</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="text_primary">#0F172A</color>
+    <color name="text_secondary">#64748B</color>
+    <color name="status_online">#16A34A</color>
+    <color name="status_offline">#DC2626</color>
+    <color name="status_busy">#D97706</color>
+    <color name="button_primary">#2563EB</color>
+    <color name="button_secondary">#475569</color>
+    <color name="button_danger">#DC2626</color>
+    <color name="border_light">#E2E8F0</color>
+    <color name="console_bg">#0F172A</color>
+    <color name="console_text">#38BDF8</color>
+</resources>

@@ -1,0 +1,58 @@
+name: Build and Release HCU Wi-Fi APK
+
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Debug APK
+        run: gradle assembleDebug --stacktrace
+
+      - name: Prepare Release Asset
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/HCU_WiFi_AutoLogin.apk
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HCU_WiFi_AutoLogin_APK
+          path: dist/HCU_WiFi_AutoLogin.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          tag_name: v1.0.0
+          name: "HCU Wi-Fi Auto-Login v1.0.0"
+          body: |
+            ### Ultra-Lightweight HCU Wi-Fi Auto-Login for Android (Realme 7)
+            - **Zero Bloat:** Pure Java runtime with zero external dependencies (~50 KB)
+            - **Multi-Building Support:** Auto-authenticates across all campus subnets (`10.*.*.*` and `192.168.56.*`)
+            - **Zero Idle Drain:** Quick Settings Tile ("HCU Login") + 1-Tap Widget + Event-driven NetworkCallback
+            - **Download:** Tap `HCU_WiFi_AutoLogin.apk` below to install directly on your phone.
+          files: dist/HCU_WiFi_AutoLogin.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
