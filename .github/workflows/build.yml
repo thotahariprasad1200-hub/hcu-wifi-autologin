@@ -1,38 +1,62 @@
-name: Build and Release HCU Wi-Fi APK
+name: Build and Release HCU Wi-Fi Auto-Login
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   build:
+    name: Build signed Android release APK
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-      - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace
-      - name: Prepare APK
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.2"
+
+      - name: Build release APK
+        run: gradle clean assembleRelease --stacktrace
+
+      - name: Prepare release asset
+        shell: bash
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/HCU_WiFi_AutoLogin.apk
-      - name: Upload Artifact
+          cp app/build/outputs/apk/release/app-release.apk dist/HCU_WiFi_AutoLogin.apk
+          sha256sum dist/HCU_WiFi_AutoLogin.apk | tee dist/SHA256SUMS.txt
+
+      - name: Upload APK build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HCU_WiFi_AutoLogin_APK
-          path: dist/HCU_WiFi_AutoLogin.apk
-      - name: Create Release
+          name: HCU_WiFi_AutoLogin_v1.4.4
+          path: |
+            dist/HCU_WiFi_AutoLogin.apk
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release for version tags
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.0.0
-          name: "HCU Wi-Fi Auto-Login v1.0.0"
-          files: dist/HCU_WiFi_AutoLogin.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: "HCU Wi-Fi Auto-Login ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: |
+            dist/HCU_WiFi_AutoLogin.apk
+            dist/SHA256SUMS.txt
