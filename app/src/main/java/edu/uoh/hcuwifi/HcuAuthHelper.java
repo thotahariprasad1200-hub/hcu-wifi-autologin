@@ -356,7 +356,7 @@ public final class HcuAuthHelper {
         boolean online = isNetworkValidated(context, wifi) || isOnline(wifi, context);
 
         if (online) {
-            reportOnlineToAndroid(context, network);
+            reportOnlineToAndroid(context, wifi);
             return new AuthResult(AuthResult.Status.ALREADY_ONLINE,
                     "Online (Internet Active) - Wi-Fi IP: " + ip, null, null);
         } else if (inHcu) {
@@ -454,9 +454,24 @@ public final class HcuAuthHelper {
     }
 
     private static String mergeCookies(String first, String second) {
-        if (first == null || first.isEmpty()) return second == null ? "" : second;
-        if (second == null || second.isEmpty()) return first;
-        return first + "; " + second;
+        // Replace cookies by name instead of sending duplicate stale values.
+        java.util.LinkedHashMap<String, String> values = new java.util.LinkedHashMap<>();
+        String combined = (first == null ? "" : first) + ";" + (second == null ? "" : second);
+        for (String item : combined.split(";")) {
+            String pair = item.trim();
+            int equals = pair.indexOf('=');
+            if (equals > 0) {
+                String name = pair.substring(0, equals).trim();
+                String value = pair.substring(equals + 1).trim();
+                values.put(name, value);
+            }
+        }
+        StringBuilder result = new StringBuilder();
+        for (java.util.Map.Entry<String, String> entry : values.entrySet()) {
+            if (result.length() > 0) result.append("; ");
+            result.append(entry.getKey()).append('=').append(entry.getValue());
+        }
+        return result.toString();
     }
 
     private static String extractXmlTag(String xml, String tag) {
