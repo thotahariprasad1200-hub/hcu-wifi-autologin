@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#1E3A8A</color>
-    <color name="primary_dark">#0F172A</color>
-    <color name="accent">#2563EB</color>
-    <color name="bg_main">#F1F5F9</color>
-    <color name="card_bg">#FFFFFF</color>
-    <color name="text_primary">#0F172A</color>
-    <color name="text_secondary">#64748B</color>
-    <color name="status_online">#16A34A</color>
-    <color name="status_offline">#DC2626</color>
-    <color name="status_busy">#D97706</color>
-    <color name="button_primary">#2563EB</color>
-    <color name="button_secondary">#475569</color>
-    <color name="button_danger">#DC2626</color>
-    <color name="border_light">#E2E8F0</color>
-    <color name="console_bg">#0F172A</color>
-    <color name="console_text">#38BDF8</color>
+    <color name="primary">#D85B86</color>
+    <color name="primary_dark">#F4E8EC</color>
+    <color name="accent">#D85B86</color>
+    <color name="bg_main">#F8F6F4</color>
+    <color name="card_bg">#FFFEFD</color>
+    <color name="text_primary">#252936</color>
+    <color name="text_secondary">#777B87</color>
+    <color name="status_online">#269B72</color>
+    <color name="status_offline">#C66B72</color>
+    <color name="status_busy">#C18B4A</color>
+    <color name="button_primary">#D85B86</color>
+    <color name="button_secondary">#778493</color>
+    <color name="button_danger">#C66B72</color>
+    <color name="border_light">#EEE9E6</color>
+    <color name="console_bg">#F1EEEC</color>
+    <color name="console_text">#596575</color>
 </resources>
