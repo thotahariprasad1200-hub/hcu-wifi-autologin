@@ -48,7 +48,7 @@
      android:text="Connection details" android:textSize="15sp" android:textStyle="bold"
      android:textColor="@color/text_primary" android:layout_marginBottom="10dp"/>
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-     android:orientation="horizontal" android:paddingVertical="8dp">
+     android:orientation="horizontal" android:paddingTop="8dp" android:paddingBottom="8dp">
      <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
       android:text="Network" android:textColor="@color/text_secondary" android:textSize="13sp"/>
      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
@@ -56,14 +56,14 @@
     </LinearLayout>
     <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/border_light"/>
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-     android:orientation="horizontal" android:paddingVertical="8dp">
+     android:orientation="horizontal" android:paddingTop="8dp" android:paddingBottom="8dp">
      <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
       android:text="@string/ip_label" android:textColor="@color/text_secondary" android:textSize="13sp"/>
      <TextView android:id="@+id/tv_local_ip" android:layout_width="wrap_content" android:layout_height="wrap_content"
       android:text="Detecting..." android:textColor="@color/text_primary" android:textSize="13sp"/>
     </LinearLayout>
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-     android:orientation="horizontal" android:paddingVertical="8dp">
+     android:orientation="horizontal" android:paddingTop="8dp" android:paddingBottom="8dp">
      <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
       android:text="@string/gateway_label" android:textColor="@color/text_secondary" android:textSize="13sp"/>
      <TextView android:id="@+id/tv_gateway_ip" android:layout_width="wrap_content" android:layout_height="wrap_content"
