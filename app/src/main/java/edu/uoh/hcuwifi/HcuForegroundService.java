@@ -9,7 +9,10 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
@@ -18,34 +21,39 @@ import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 
+import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Ultra-fast event-driven foreground service for Hari Auto Login.
- * Modeled strictly on the proven laptop/MacroDroid mechanism:
- * 1. Dual-triggers on Wi-Fi state change (both ConnectivityManager and WifiManager broadcasts).
- * 2. Whenever campus Wi-Fi (10.*.*.*) is detected, sends the login POST directly to Sophos (192.168.56.2:8090).
- * 3. Zero DNS pre-probe delays, zero thread sleep queues, zero debounce lockouts.
- * 4. Completes in ~300ms and goes completely dormant to save 100% battery & CPU.
+ * Event-driven HCU Wi-Fi monitor.
+ *
+ * It stays in a low-importance foreground service so Android can deliver Wi-Fi
+ * network callbacks while the app is not visible. It performs no periodic polling:
+ * when idle, it waits for Wi-Fi/network events and uses no scheduled wakeups.
  */
 public class HcuForegroundService extends Service {
 
     private static final String TAG = "HcuFgService";
     private static final String CHANNEL_ID = "hcu_wifi_monitor";
     private static final int NOTIF_ID = 7001;
+    private static final int MAX_IP_WAIT_RETRIES = 10;
 
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private BroadcastReceiver wifiStateReceiver;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-
-    // Fast concurrency control: drops duplicate simultaneous events within 3s
     private final AtomicBoolean isAuthenticating = new AtomicBoolean(false);
     private final AtomicLong lastAttemptTimestamp = new AtomicLong(0);
+    private final AtomicInteger networkGeneration = new AtomicInteger(0);
+
+    private volatile Network currentWifiNetwork;
+    private volatile Network lastAttemptNetwork;
 
     public static void start(Context ctx) {
         if (ctx == null) return;
@@ -57,36 +65,48 @@ public class HcuForegroundService extends Service {
                 ctx.startService(intent);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error starting HcuForegroundService: " + e.getMessage());
+            Log.e(TAG, "Could not start Wi-Fi monitor service", e);
         }
     }
 
     public static void stop(Context ctx) {
-        if (ctx == null) return;
-        ctx.stopService(new Intent(ctx, HcuForegroundService.class));
+        if (ctx != null) ctx.stopService(new Intent(ctx, HcuForegroundService.class));
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        startForeground(NOTIF_ID, buildNotification("Monitoring HCU Wi-Fi (Auto-login active)"));
+        startAsForeground();
         registerWifiCallback();
         registerWifiBroadcastReceiver();
-        startPeriodicWatchdog();
-        Log.d(TAG, "Hari Auto Login service initialized with dual event triggers");
+        Log.i(TAG, "Event-driven Wi-Fi monitor is active; no periodic polling is scheduled.");
+    }
+
+    private void startAsForeground() {
+        Notification notification = buildNotification("Monitoring Wi-Fi connections");
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else {
+            startForeground(NOTIF_ID, notification);
+        }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Immediate check on service startup
-        triggerOneShotLogin(null, "Service started");
+        if (!HcuAuthHelper.isAutoLoginEnabled(this)) {
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
+        Network network = HcuAuthHelper.getWifiNetwork(this);
+        if (network != null) {
+            acceptNetwork(network, "Service startup");
+        } else {
+            updateNotification("Waiting for a saved Wi-Fi network");
+        }
         return START_STICKY;
     }
 
-    /**
-     * Trigger 1: Android ConnectivityManager NetworkCallback.
-     */
     private void registerWifiCallback() {
         connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         if (connectivityManager == null) return;
@@ -98,147 +118,145 @@ public class HcuForegroundService extends Service {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(Network network) {
-                Log.d(TAG, "NetworkCallback: Wi-Fi connected: " + network);
-                triggerOneShotLogin(network, "onAvailable");
+                Log.i(TAG, "Wi-Fi network available: " + network);
+                acceptNetwork(network, "Wi-Fi connected");
             }
 
             @Override
             public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) {
                 if (caps == null) return;
-                boolean isCaptive = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL);
-                boolean isValidated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    if (network.equals(currentWifiNetwork)) {
+                        updateNotification("Wi-Fi is online — automatic login is standing by");
+                    }
+                    return;
+                }
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)
+                        || caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    acceptNetwork(network, "Wi-Fi needs portal validation");
+                }
+            }
 
-                if (isCaptive || !isValidated) {
-                    triggerOneShotLogin(network, "Captive portal detected");
+            @Override
+            public void onLinkPropertiesChanged(Network network, LinkProperties properties) {
+                if (hasUsableIpv4(properties)) {
+                    acceptNetwork(network, "Wi-Fi address assigned");
                 }
             }
 
             @Override
             public void onLost(Network network) {
-                Log.d(TAG, "NetworkCallback: Wi-Fi disconnected: " + network);
-                isAuthenticating.set(false);
-                updateNotification("Wi-Fi disconnected. Waiting for campus Wi-Fi...");
+                Log.i(TAG, "Wi-Fi network lost: " + network);
+                if (network.equals(currentWifiNetwork)) {
+                    currentWifiNetwork = null;
+                    networkGeneration.incrementAndGet();
+                    isAuthenticating.set(false);
+                    lastAttemptTimestamp.set(0);
+                    lastAttemptNetwork = null;
+                    updateNotification("Wi-Fi disconnected — waiting for the next connection");
+                }
             }
         };
 
         try {
             connectivityManager.registerNetworkCallback(request, networkCallback);
         } catch (Exception e) {
-            Log.e(TAG, "Failed to register network callback", e);
+            Log.e(TAG, "Could not register Wi-Fi network callback", e);
         }
     }
 
-    /**
-     * Trigger 2: WifiManager BroadcastReceiver (MacroDroid style).
-     * Fires immediately whenever the user toggles Wi-Fi in quick settings.
-     */
     private void registerWifiBroadcastReceiver() {
         wifiStateReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                if (intent == null) return;
+                if (intent == null || !HcuAuthHelper.isAutoLoginEnabled(context)) return;
                 String action = intent.getAction();
-                Log.d(TAG, "BroadcastReceiver: Wi-Fi action received: " + action);
-
                 if (HcuAuthHelper.isWifiConnected(context)) {
-                    triggerOneShotLogin(null, "Wi-Fi broadcast: " + action);
-                } else {
-                    updateNotification("Wi-Fi disconnected. Waiting for campus Wi-Fi...");
+                    Network network = HcuAuthHelper.getWifiNetwork(context);
+                    if (network != null) acceptNetwork(network, "Wi-Fi system broadcast");
                 }
             }
         };
 
         IntentFilter filter = new IntentFilter();
         filter.addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION);
-        filter.addAction(WifiManager.WIFI_STATE_CHANGED_ACTION);
         filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
         try {
-            registerReceiver(wifiStateReceiver, filter);
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(wifiStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(wifiStateReceiver, filter);
+            }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to register wifiStateReceiver", e);
+            Log.e(TAG, "Could not register Wi-Fi broadcast receiver", e);
         }
     }
 
-    /**
-     * Watchdog: Re-checks every 3 minutes while connected to Wi-Fi to catch silent session timeouts.
-     */
-    private void startPeriodicWatchdog() {
-        scheduler.scheduleWithFixedDelay(() -> {
-            try {
-                if (HcuAuthHelper.isWifiConnected(this)) {
-                    Network net = HcuAuthHelper.getWifiNetwork(this);
-                    if (!HcuAuthHelper.isOnline(net, this)) {
-                        Log.d(TAG, "Watchdog detected unauthenticated Wi-Fi state");
-                        triggerOneShotLogin(net, "Watchdog routine");
-                    }
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Watchdog error: " + e.getMessage());
-            }
-        }, 1, 3, TimeUnit.MINUTES);
+    private void acceptNetwork(Network network, String reason) {
+        if (network == null || !HcuAuthHelper.isWifiNetwork(this, network)
+                || !HcuAuthHelper.isAutoLoginEnabled(this)) return;
+
+        if (!network.equals(currentWifiNetwork)) {
+            currentWifiNetwork = network;
+            networkGeneration.incrementAndGet();
+            isAuthenticating.set(false);
+            lastAttemptTimestamp.set(0);
+            lastAttemptNetwork = null;
+        }
+        triggerOneShotLogin(network, reason, networkGeneration.get(), 0);
     }
 
-    /**
-     * Core laptop-style one-shot login.
-     * Fires directly to Sophos gateway without pre-probe delays.
-     */
-    private void triggerOneShotLogin(Network network, String triggerReason) {
+    private void triggerOneShotLogin(Network network, String reason, int generation, int ipWaitAttempt) {
+        if (network == null || generation != networkGeneration.get()
+                || !network.equals(currentWifiNetwork)
+                || !HcuAuthHelper.isAutoLoginEnabled(this)) return;
+
+        if (!hasUsableIpv4(connectivityManager != null ? connectivityManager.getLinkProperties(network) : null)) {
+            if (ipWaitAttempt < MAX_IP_WAIT_RETRIES) {
+                scheduler.schedule(
+                        () -> triggerOneShotLogin(network, reason, generation, ipWaitAttempt + 1),
+                        200, TimeUnit.MILLISECONDS);
+            } else {
+                Log.d(TAG, "Wi-Fi has not received an IPv4 address yet; waiting for link callback.");
+            }
+            return;
+        }
+
+        if (HcuAuthHelper.isNetworkValidated(this, network)) {
+            updateNotification("Wi-Fi is already online — no login needed");
+            return;
+        }
+
         long now = System.currentTimeMillis();
-        // Ignore near-simultaneous Android callback/broadcast duplicates.
-        if (now - lastAttemptTimestamp.get() < 1500) {
-            Log.d(TAG, "Coalescing duplicate trigger: " + triggerReason);
-            return;
-        }
-        if (!isAuthenticating.compareAndSet(false, true)) {
-            Log.d(TAG, "Login flow already active; coalescing trigger: " + triggerReason);
-            return;
-        }
+        if (network.equals(lastAttemptNetwork) && now - lastAttemptTimestamp.get() < 900) return;
+        if (!isAuthenticating.compareAndSet(false, true)) return;
+
+        lastAttemptNetwork = network;
         lastAttemptTimestamp.set(now);
-        scheduler.execute(() -> runLoginAttempt(network, triggerReason, 0, 0));
+        scheduler.execute(() -> runLoginAttempt(network, reason, generation, 0));
     }
 
-    /**
-     * DHCP and captive-portal routing are not always ready on the first Wi-Fi callback.
-     * Retry address discovery with bounded backoff before sending credentials.
-     */
-    private void runLoginAttempt(Network requestedNetwork, String reason, int networkAttempt, int authAttempt) {
-        Network activeNetwork = requestedNetwork != null ? requestedNetwork : HcuAuthHelper.getWifiNetwork(this);
+    private void runLoginAttempt(Network network, String reason, int generation, int authRetry) {
         try {
-            if (!HcuAuthHelper.isWifiConnected(this) || activeNetwork == null) {
-                updateNotification("Wi-Fi is not ready. Waiting for connection...");
+            if (generation != networkGeneration.get() || !network.equals(currentWifiNetwork)
+                    || !HcuAuthHelper.isWifiNetwork(this, network)
+                    || !HcuAuthHelper.isAutoLoginEnabled(this)) {
                 finishLoginFlow();
                 return;
             }
 
-            String ip = HcuAuthHelper.getLocalWifiIpAddress(this, activeNetwork);
-            if (!HcuAuthHelper.isHcuSubnet(ip)) {
-                if (networkAttempt < 5) {
-                    long delaySeconds = new long[]{2, 3, 5, 8, 12}[networkAttempt];
-                    updateNotification("Wi-Fi connected; waiting for HCU network address...");
-                    Log.d(TAG, "Wi-Fi address not ready/recognised (" + ip + "); retrying in " + delaySeconds + "s");
-                    scheduler.schedule(
-                            () -> runLoginAttempt(activeNetwork, reason, networkAttempt + 1, authAttempt),
-                            delaySeconds, TimeUnit.SECONDS);
-                    return;
-                }
-                updateNotification("Connected to Wi-Fi, but it is not an HCU login network (" + ip + ").");
+            if (HcuAuthHelper.isNetworkValidated(this, network)) {
+                updateNotification("Wi-Fi is online — no sign-in required");
                 finishLoginFlow();
                 return;
             }
 
-            if (HcuAuthHelper.isOnline(activeNetwork, this)) {
-                HcuAuthHelper.reportOnlineToAndroid(this, activeNetwork);
-                updateNotification("✓ HCU Wi-Fi: Internet is already active.");
-                finishLoginFlow();
-                return;
-            }
-
-            updateNotification("HCU Wi-Fi detected (" + ip + "). Signing in...");
-            HcuAuthHelper.AuthResult result = HcuAuthHelper.loginSync(this, activeNetwork);
-            Log.d(TAG, "Auto-login result (" + reason + "): " + result);
+            updateNotification("Checking HCU portal…");
+            HcuAuthHelper.AuthResult result = HcuAuthHelper.loginSync(this, network);
+            Log.i(TAG, "Automatic login result (" + reason + "): " + result.status + " — " + result.message);
 
             if (result.isSuccess()) {
-                updateNotification("✓ HCU Wi-Fi: Signed in; internet verified.");
+                updateNotification("HCU Wi-Fi connected — automatic login is standing by");
                 finishLoginFlow();
                 return;
             }
@@ -247,28 +265,39 @@ public class HcuForegroundService extends Service {
                     || result.status == HcuAuthHelper.AuthResult.Status.ERROR
                     || result.status == HcuAuthHelper.AuthResult.Status.BUSY;
 
-            if (retryable && authAttempt < 2 && HcuAuthHelper.isWifiConnected(this)) {
-                long delaySeconds = 4L + (authAttempt * 5L);
-                updateNotification("Portal did not finish yet. Retrying automatically...");
-                Log.w(TAG, "Retryable authentication result; retrying in " + delaySeconds + "s: " + result);
+            if (retryable && authRetry < 2 && generation == networkGeneration.get()
+                    && HcuAuthHelper.isWifiNetwork(this, network)) {
+                long delayMs = authRetry == 0 ? 1200L : 2400L;
+                updateNotification("Portal is not ready yet — retrying automatically");
                 scheduler.schedule(
-                        () -> runLoginAttempt(activeNetwork, reason, 5, authAttempt + 1),
-                        delaySeconds, TimeUnit.SECONDS);
+                        () -> runLoginAttempt(network, reason, generation, authRetry + 1),
+                        delayMs, TimeUnit.MILLISECONDS);
                 return;
             }
 
-            if (result.status == HcuAuthHelper.AuthResult.Status.INVALID_CREDENTIALS) {
-                updateNotification("HCU Wi-Fi: Portal rejected the saved credentials. Open the app to check them.");
+            if (result.status == HcuAuthHelper.AuthResult.Status.NOT_IN_HCU_SUBNET) {
+                updateNotification("Wi-Fi connected — no HCU portal detected; left unchanged");
+            } else if (result.status == HcuAuthHelper.AuthResult.Status.INVALID_CREDENTIALS) {
+                updateNotification("HCU portal rejected saved credentials — check them in the app");
             } else {
-                updateNotification("HCU Wi-Fi login not confirmed: " + result.message);
+                updateNotification("HCU sign-in could not be verified — will retry on the next Wi-Fi event");
             }
             finishLoginFlow();
-
         } catch (Exception e) {
-            Log.e(TAG, "Error during one-shot auto-login", e);
-            updateNotification("HCU Wi-Fi login error: " + e.getMessage());
+            Log.e(TAG, "Automatic Wi-Fi login failed", e);
+            updateNotification("Automatic login error — waiting for the next Wi-Fi event");
             finishLoginFlow();
         }
+    }
+
+    private boolean hasUsableIpv4(LinkProperties properties) {
+        if (properties == null) return false;
+        for (LinkAddress linkAddress : properties.getLinkAddresses()) {
+            InetAddress address = linkAddress.getAddress();
+            if (address instanceof Inet4Address && !address.isAnyLocalAddress()
+                    && !address.isLoopbackAddress() && !address.isLinkLocalAddress()) return true;
+        }
+        return false;
     }
 
     private void finishLoginFlow() {
@@ -278,12 +307,12 @@ public class HcuForegroundService extends Service {
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "Hari Auto Login Monitor",
-                    NotificationManager.IMPORTANCE_LOW
-            );
-            channel.setDescription("Monitors campus Wi-Fi connection and logs into captive portal automatically");
+                    CHANNEL_ID, "HCU Wi-Fi Auto-Login", NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription("Keeps the automatic campus Wi-Fi sign-in listener available.");
             channel.setShowBadge(false);
+            channel.setSound(null, null);
+            channel.enableVibration(false);
+            channel.enableLights(false);
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(channel);
         }
@@ -294,20 +323,18 @@ public class HcuForegroundService extends Service {
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this, 0, tapIntent, PendingIntent.FLAG_IMMUTABLE);
 
-        Notification.Builder builder;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            builder = new Notification.Builder(this, CHANNEL_ID);
-        } else {
-            builder = new Notification.Builder(this);
-        }
+        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? new Notification.Builder(this, CHANNEL_ID)
+                : new Notification.Builder(this);
 
-        return builder
-                .setContentTitle("Hari Auto Login")
+        builder.setContentTitle("HCU Wi-Fi Auto-Login")
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_wifi)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
-                .build();
+                .setOnlyAlertOnce(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) builder.setSilent(true);
+        return builder.build();
     }
 
     private void updateNotification(String text) {
@@ -321,18 +348,16 @@ public class HcuForegroundService extends Service {
 
     @Override
     public void onDestroy() {
-        super.onDestroy();
         if (connectivityManager != null && networkCallback != null) {
-            try {
-                connectivityManager.unregisterNetworkCallback(networkCallback);
-            } catch (Exception ignored) {}
+            try { connectivityManager.unregisterNetworkCallback(networkCallback); }
+            catch (Exception ignored) {}
         }
         if (wifiStateReceiver != null) {
-            try {
-                unregisterReceiver(wifiStateReceiver);
-            } catch (Exception ignored) {}
+            try { unregisterReceiver(wifiStateReceiver); }
+            catch (Exception ignored) {}
         }
         scheduler.shutdownNow();
+        super.onDestroy();
     }
 
     @Override
