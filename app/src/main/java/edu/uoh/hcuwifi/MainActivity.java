@@ -52,6 +52,8 @@ public class MainActivity extends Activity {
     private LinearLayout layoutLogHeader;
     private TextView tvToggleLog;
     private Button btnRealmeSettings;
+    private View pageHome;
+    private View pageSettings;
 
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -112,6 +114,13 @@ public class MainActivity extends Activity {
         layoutLogHeader = findViewById(R.id.layout_log_header);
         tvToggleLog = findViewById(R.id.tv_toggle_log);
         btnRealmeSettings = findViewById(R.id.btn_realme_settings);
+        pageHome = findViewById(R.id.page_home);
+        pageSettings = findViewById(R.id.page_settings);
+    }
+
+    private void showSettings(boolean show) {
+        if (pageHome != null) pageHome.setVisibility(show ? View.GONE : View.VISIBLE);
+        if (pageSettings != null) pageSettings.setVisibility(show ? View.VISIBLE : View.GONE);
     }
 
     private void loadSavedPreferences() {
@@ -122,6 +131,10 @@ public class MainActivity extends Activity {
     }
 
     private void setupListeners() {
+        View openSettings = findViewById(R.id.btn_open_settings);
+        View backHome = findViewById(R.id.btn_back_home);
+        if (openSettings != null) openSettings.setOnClickListener(v -> showSettings(true));
+        if (backHome != null) backHome.setOnClickListener(v -> showSettings(false));
         // Toggle Activity Log show/hide
         View.OnClickListener toggleLogListener = v -> {
             if (scrollLog.getVisibility() == View.VISIBLE) {
