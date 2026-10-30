@@ -249,7 +249,7 @@ public class HcuForegroundService extends Service {
 
             // Verify the actual Wi-Fi path, rather than trusting a stale Android
             // VALIDATED flag or accidentally testing the phone's mobile-data route.
-            if (HcuAuthHelper.isOnline(network, this)) {
+            if (hasInternet(network)) {
                 HcuAuthHelper.reportOnlineToAndroid(this, network);
                 updateNotification("HCU Wi-Fi is online — automatic login ready");
                 Log.i(TAG, "Internet already works on HCU Wi-Fi.");
@@ -306,7 +306,7 @@ public class HcuForegroundService extends Service {
                 return;
             }
 
-            if (HcuAuthHelper.isOnline(network, this)) {
+            if (hasInternet(network)) {
                 HcuAuthHelper.reportOnlineToAndroid(this, network);
                 updateNotification("✓ HCU Wi-Fi connected — internet verified");
                 Log.i(TAG, "Zero-touch login verified on attempt " + (authRetry + 1));
@@ -339,6 +339,15 @@ public class HcuForegroundService extends Service {
                 delay, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Prefer Android's validation result when available, with a direct probe as
+     * a fallback. Both checks are scoped to this exact Wi-Fi Network.
+     */
+    private boolean hasInternet(Network network) {
+        return HcuAuthHelper.isNetworkValidated(this, network)
+                || HcuAuthHelper.isOnline(network, this);
+    }
+
     private boolean isCurrentNetwork(Network network, int generation) {
         return network != null
                 && generation == networkGeneration.get()
@@ -369,7 +378,7 @@ public class HcuForegroundService extends Service {
             try {
                 Network network = currentWifiNetwork;
                 if (network != null && isCurrentNetwork(network, networkGeneration.get())
-                        && !HcuAuthHelper.isOnline(network, this)) {
+                        && !hasInternet(network)) {
                     acceptNetwork(network, "Periodic HCU session check");
                 }
             } catch (Exception e) {
