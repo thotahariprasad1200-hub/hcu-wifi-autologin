@@ -20,7 +20,7 @@
     <string name="gateway_val">192.168.56.2:8090</string>
 
     <string name="credentials_title">Enter Your Campus Credentials</string>
-    <string name="username_hint">Username / ID (e.g. 26mnms10)</string>
+    <string name="username_hint">Username / ID (e.g. 26love10)</string>
     <string name="password_hint">Password</string>
     <string name="save_credentials">Save &amp; Start Auto-Login</string>
     <string name="auto_login_label">Fully Automatic Login on Wi-Fi Connect</string>

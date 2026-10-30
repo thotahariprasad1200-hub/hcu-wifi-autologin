@@ -16,6 +16,7 @@ import android.provider.Settings;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.Switch;
@@ -29,7 +30,7 @@ import java.util.Locale;
 /**
  * Pure Android Activity for Hari Auto Login (HCU Wi-Fi management and diagnostics).
  * Designed and developed with 🤍 by Hari 🎀.
- * Uses zero external libraries (no androidx) for minimal RAM footprint and sub-50 KB APK.
+ * Fits on a single phone screen with zero scrolling required!
  */
 public class MainActivity extends Activity {
 
@@ -48,6 +49,9 @@ public class MainActivity extends Activity {
     private TextView tvConsoleLog;
     private TextView btnClearLog;
     private ScrollView scrollLog;
+    private LinearLayout layoutLogHeader;
+    private TextView tvToggleLog;
+    private Button btnRealmeSettings;
 
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -76,22 +80,10 @@ public class MainActivity extends Activity {
             appendLog("Zero-intervention background service active.");
         }
 
-        appendLog("Hari Auto Login started on " + Build.MANUFACTURER + " " + Build.MODEL + " (Android " + Build.VERSION.RELEASE + ")");
-
-        // Check battery optimization for Realme 24/7 reliability
-        checkBatteryOptimization();
+        appendLog("Hari Auto Login started on " + Build.MANUFACTURER + " " + Build.MODEL);
 
         HcuAuthHelper.bindToWifi(this);
         refreshStatus();
-    }
-
-    private void checkBatteryOptimization() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
-                appendLog("[Note] For uninterrupted background auto-login on Realme/ColorOS, grant battery unrestricted access.");
-            }
-        }
     }
 
     @Override
@@ -117,6 +109,9 @@ public class MainActivity extends Activity {
         tvConsoleLog = findViewById(R.id.tv_console_log);
         btnClearLog = findViewById(R.id.btn_clear_log);
         scrollLog = findViewById(R.id.scroll_log);
+        layoutLogHeader = findViewById(R.id.layout_log_header);
+        tvToggleLog = findViewById(R.id.tv_toggle_log);
+        btnRealmeSettings = findViewById(R.id.btn_realme_settings);
     }
 
     private void loadSavedPreferences() {
@@ -127,6 +122,34 @@ public class MainActivity extends Activity {
     }
 
     private void setupListeners() {
+        // Toggle Activity Log show/hide
+        View.OnClickListener toggleLogListener = v -> {
+            if (scrollLog.getVisibility() == View.VISIBLE) {
+                scrollLog.setVisibility(View.GONE);
+                tvToggleLog.setText("▶ Live Activity Log (Tap to open)");
+            } else {
+                scrollLog.setVisibility(View.VISIBLE);
+                tvToggleLog.setText("▼ Live Activity Log (Tap to close)");
+                scrollLog.post(() -> scrollLog.fullScroll(View.FOCUS_DOWN));
+            }
+        };
+        layoutLogHeader.setOnClickListener(toggleLogListener);
+        tvToggleLog.setOnClickListener(toggleLogListener);
+
+        // Realme Background Settings shortcut
+        btnRealmeSettings.setOnClickListener(v -> {
+            try {
+                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+                Toast.makeText(this, "Set Battery to 'Allow background activity' & enable 'Auto-launch'", Toast.LENGTH_LONG).show();
+            } catch (Exception e) {
+                try {
+                    startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                } catch (Exception ignored) {}
+            }
+        });
+
         btnSaveCreds.setOnClickListener(v -> {
             String u = etUsername.getText().toString().trim();
             String p = etPassword.getText().toString();
@@ -144,7 +167,7 @@ public class MainActivity extends Activity {
                 HcuForegroundService.stop(this);
             }
             appendLog("Credentials saved. User: " + u + ", Auto-Login: " + auto);
-            Toast.makeText(this, "Settings saved! Authenticating...", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Saved! Authenticating...", Toast.LENGTH_SHORT).show();
             performLogin();
         });
 
@@ -153,7 +176,7 @@ public class MainActivity extends Activity {
         btnLogout.setOnClickListener(v -> performLogout());
 
         btnProbe.setOnClickListener(v -> {
-            appendLog("Running internet probe (generate_204)...");
+            appendLog("Checking internet probe (generate_204)...");
             refreshStatus();
         });
 
@@ -212,9 +235,7 @@ public class MainActivity extends Activity {
         if (connectivityManager != null && networkCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
-            } catch (Exception e) {
-                // Ignore
-            }
+            } catch (Exception ignored) {}
         }
     }
 
@@ -231,7 +252,7 @@ public class MainActivity extends Activity {
 
             if (isOnline) {
                 HcuAuthHelper.reportOnlineToAndroid(this, null);
-                updateStatusDisplay(true, "Internet Active (HTTP 204 OK)", ip);
+                updateStatusDisplay(true, "Online (Internet Active)", ip);
                 appendLog("[Status] Online. Subnet: " + (inHcu ? "HCU Campus" : "Other (" + ip + ")"));
             } else if (inHcu) {
                 updateStatusDisplay(false, "HCU Subnet Detected - Login Required", ip);
@@ -274,7 +295,6 @@ public class MainActivity extends Activity {
         HcuAuthHelper.bindToWifi(this);
         setBusy(true);
         appendLog("Initiating login for user: " + u + "...");
-        appendLog("Target gateway: " + HcuAuthHelper.PRIMARY_GATEWAY + ":" + HcuAuthHelper.PORT);
 
         HcuAuthHelper.loginAsync(this, null, u, p, result -> {
             setBusy(false);
