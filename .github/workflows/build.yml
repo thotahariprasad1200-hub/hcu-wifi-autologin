@@ -52,7 +52,7 @@ jobs:
       - name: Upload APK build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HCU_WiFi_AutoLogin_${{ github.ref_name }}
+          name: HCU_WiFi_AutoLogin
           path: |
             dist/HCU_WiFi_AutoLogin.apk
             dist/SHA256SUMS.txt
