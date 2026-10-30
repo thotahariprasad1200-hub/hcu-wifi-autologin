@@ -184,59 +184,95 @@ public class HcuForegroundService extends Service {
      */
     private void triggerOneShotLogin(Network network, String triggerReason) {
         long now = System.currentTimeMillis();
-        // 3-second debounce to absorb near-simultaneous callback + broadcast events
-        if (now - lastAttemptTimestamp.get() < 3000) {
-            Log.d(TAG, "Skipping trigger (" + triggerReason + ") - debounced <3s");
+        // Ignore near-simultaneous Android callback/broadcast duplicates.
+        if (now - lastAttemptTimestamp.get() < 1500) {
+            Log.d(TAG, "Coalescing duplicate trigger: " + triggerReason);
             return;
         }
-
         if (!isAuthenticating.compareAndSet(false, true)) {
-            Log.d(TAG, "Skipping trigger (" + triggerReason + ") - already authenticating");
+            Log.d(TAG, "Login flow already active; coalescing trigger: " + triggerReason);
             return;
         }
-
         lastAttemptTimestamp.set(now);
-        Log.d(TAG, "Executing laptop-style auto-login: " + triggerReason);
+        scheduler.execute(() -> runLoginAttempt(network, triggerReason, 0, 0));
+    }
 
-        scheduler.execute(() -> {
-            try {
-                if (!HcuAuthHelper.isWifiConnected(this)) {
-                    isAuthenticating.set(false);
-                    return;
-                }
-
-                String ip = HcuAuthHelper.getLocalWifiIpAddress(this);
-
-                // Only proceed if on campus IP (10.*.*.* or 192.168.56.*)
-                if (!HcuAuthHelper.isHcuSubnet(ip)) {
-                    Log.d(TAG, "Not on campus Wi-Fi (IP: " + ip + ")");
-                    updateNotification("Not on campus Wi-Fi (" + ip + ")");
-                    isAuthenticating.set(false);
-                    return;
-                }
-
-                updateNotification("HCU Wi-Fi: Logging in (" + ip + ")...");
-
-                // Send login POST directly to Sophos gateway (just like the laptop)
-                HcuAuthHelper.AuthResult result = HcuAuthHelper.loginSync(this, network);
-                Log.d(TAG, "Auto-login result: " + result);
-
-                if (result.isSuccess()) {
-                    HcuAuthHelper.reportOnlineToAndroid(this, network);
-                    updateNotification("✓ Hari Auto Login: Online (" + ip + ")");
-                } else if (result.status == HcuAuthHelper.AuthResult.Status.INVALID_CREDENTIALS) {
-                    updateNotification("Hari Auto Login: Check username & password");
-                } else {
-                    updateNotification("Hari Auto Login: " + result.message);
-                }
-
-            } catch (Exception e) {
-                Log.e(TAG, "Error during one-shot auto-login", e);
-                updateNotification("Login error: " + e.getMessage());
-            } finally {
-                isAuthenticating.set(false);
+    /**
+     * DHCP and captive-portal routing are not always ready on the first Wi-Fi callback.
+     * Retry address discovery with bounded backoff before sending credentials.
+     */
+    private void runLoginAttempt(Network requestedNetwork, String reason, int networkAttempt, int authAttempt) {
+        Network activeNetwork = requestedNetwork != null ? requestedNetwork : HcuAuthHelper.getWifiNetwork(this);
+        try {
+            if (!HcuAuthHelper.isWifiConnected(this) || activeNetwork == null) {
+                updateNotification("Wi-Fi is not ready. Waiting for connection...");
+                finishLoginFlow();
+                return;
             }
-        });
+
+            String ip = HcuAuthHelper.getLocalWifiIpAddress(this, activeNetwork);
+            if (!HcuAuthHelper.isHcuSubnet(ip)) {
+                if (networkAttempt < 5) {
+                    long delaySeconds = new long[]{2, 3, 5, 8, 12}[networkAttempt];
+                    updateNotification("Wi-Fi connected; waiting for HCU network address...");
+                    Log.d(TAG, "Wi-Fi address not ready/recognised (" + ip + "); retrying in " + delaySeconds + "s");
+                    scheduler.schedule(
+                            () -> runLoginAttempt(activeNetwork, reason, networkAttempt + 1, authAttempt),
+                            delaySeconds, TimeUnit.SECONDS);
+                    return;
+                }
+                updateNotification("Connected to Wi-Fi, but it is not an HCU login network (" + ip + ").");
+                finishLoginFlow();
+                return;
+            }
+
+            if (HcuAuthHelper.isOnline(activeNetwork, this)) {
+                HcuAuthHelper.reportOnlineToAndroid(this, activeNetwork);
+                updateNotification("✓ HCU Wi-Fi: Internet is already active.");
+                finishLoginFlow();
+                return;
+            }
+
+            updateNotification("HCU Wi-Fi detected (" + ip + "). Signing in...");
+            HcuAuthHelper.AuthResult result = HcuAuthHelper.loginSync(this, activeNetwork);
+            Log.d(TAG, "Auto-login result (" + reason + "): " + result);
+
+            if (result.isSuccess()) {
+                updateNotification("✓ HCU Wi-Fi: Signed in; internet verified.");
+                finishLoginFlow();
+                return;
+            }
+
+            boolean retryable = result.status == HcuAuthHelper.AuthResult.Status.GATEWAY_UNREACHABLE
+                    || result.status == HcuAuthHelper.AuthResult.Status.ERROR
+                    || result.status == HcuAuthHelper.AuthResult.Status.BUSY;
+
+            if (retryable && authAttempt < 2 && HcuAuthHelper.isWifiConnected(this)) {
+                long delaySeconds = 4L + (authAttempt * 5L);
+                updateNotification("Portal did not finish yet. Retrying automatically...");
+                Log.w(TAG, "Retryable authentication result; retrying in " + delaySeconds + "s: " + result);
+                scheduler.schedule(
+                        () -> runLoginAttempt(activeNetwork, reason, 5, authAttempt + 1),
+                        delaySeconds, TimeUnit.SECONDS);
+                return;
+            }
+
+            if (result.status == HcuAuthHelper.AuthResult.Status.INVALID_CREDENTIALS) {
+                updateNotification("HCU Wi-Fi: Portal rejected the saved credentials. Open the app to check them.");
+            } else {
+                updateNotification("HCU Wi-Fi login not confirmed: " + result.message);
+            }
+            finishLoginFlow();
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error during one-shot auto-login", e);
+            updateNotification("HCU Wi-Fi login error: " + e.getMessage());
+            finishLoginFlow();
+        }
+    }
+
+    private void finishLoginFlow() {
+        isAuthenticating.set(false);
     }
 
     private void createNotificationChannel() {

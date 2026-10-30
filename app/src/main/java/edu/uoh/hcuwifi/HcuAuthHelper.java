@@ -30,6 +30,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.net.URI;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -47,7 +50,7 @@ public final class HcuAuthHelper {
     public static final String PRIMARY_GATEWAY = "192.168.56.2";
     public static final String FALLBACK_GATEWAY = "10.4.0.1";
     public static final int PORT = 8090;
-    public static final String AUTH_PATH = "/httpclient.html";
+    public static final String AUTH_PATH = "/login.xml";
 
     // Connectivity probe endpoint (Google captive portal probe)
     public static final String PROBE_URL = "http://connectivitycheck.gstatic.com/generate_204";
@@ -166,22 +169,13 @@ public final class HcuAuthHelper {
         throw new IOException("No active Wi-Fi connection found. Refusing to route traffic over Mobile Data.");
     }
 
+    /**
+     * Compatibility helper. Requests are bound individually with Network.openConnection();
+     * process-wide binding is deliberately avoided so background app traffic is not trapped
+     * on a captive Wi-Fi network or sent over the wrong network after a handoff.
+     */
     public static boolean bindToWifi(Context context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && context != null) {
-            try {
-                ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-                if (cm != null) {
-                    Network wifiNet = getWifiNetwork(context);
-                    if (wifiNet != null) {
-                        cm.bindProcessToNetwork(wifiNet);
-                        return true;
-                    }
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to bind to Wi-Fi: " + e.getMessage());
-            }
-        }
-        return false;
+        return getWifiNetwork(context) != null;
     }
 
     public static boolean isWifiConnected(Context context) {
@@ -198,10 +192,15 @@ public final class HcuAuthHelper {
     }
 
     public static String getLocalWifiIpAddress(Context context) {
+        return getLocalWifiIpAddress(context, getWifiNetwork(context));
+    }
+
+    /** Resolve the address from the exact Wi-Fi network that raised the callback. */
+    public static String getLocalWifiIpAddress(Context context, Network preferredNetwork) {
         if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             try {
                 ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-                Network wifiNet = getWifiNetwork(context);
+                Network wifiNet = preferredNetwork != null ? preferredNetwork : getWifiNetwork(context);
                 if (cm != null && wifiNet != null) {
                     LinkProperties lp = cm.getLinkProperties(wifiNet);
                     if (lp != null) {
@@ -218,12 +217,13 @@ public final class HcuAuthHelper {
             }
         }
 
+        // Fallback only inspects Wi-Fi interfaces; never returns a cellular address.
         try {
             List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
             for (NetworkInterface intf : interfaces) {
                 if (intf.isLoopback() || !intf.isUp()) continue;
                 String name = intf.getName().toLowerCase(Locale.US);
-                if (!name.contains("wlan") && !name.contains("ap")) continue;
+                if (!name.contains("wlan") && !name.contains("wifi")) continue;
                 List<InetAddress> addrs = Collections.list(intf.getInetAddresses());
                 for (InetAddress addr : addrs) {
                     if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
@@ -313,6 +313,147 @@ public final class HcuAuthHelper {
         }
     }
 
+    private static final String PORTAL_PAGE_PATH = "/httpclient.html";
+    private static final String LOGIN_PATH = "/login.xml";
+    private static final String LIVE_PATH = "/live";
+
+    private static final class HttpResult {
+        final int code;
+        final String body;
+        final String cookies;
+        final String location;
+
+        HttpResult(int code, String body, String cookies, String location) {
+            this.code = code;
+            this.body = body != null ? body : "";
+            this.cookies = cookies != null ? cookies : "";
+            this.location = location != null ? location : "";
+        }
+    }
+
+    private static HttpResult request(Network network, Context context, URL url,
+                                      String method, String body, String cookies,
+                                      String referer) throws IOException {
+        HttpURLConnection conn = null;
+        try {
+            conn = openWifiConnection(network, context, url);
+            conn.setRequestMethod(method);
+            conn.setInstanceFollowRedirects(false);
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            conn.setUseCaches(false);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36");
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml,text/xml,*/*");
+            conn.setRequestProperty("Connection", "close");
+            if (referer != null && !referer.isEmpty()) {
+                conn.setRequestProperty("Referer", referer);
+            }
+            if (cookies != null && !cookies.isEmpty()) {
+                conn.setRequestProperty("Cookie", cookies);
+            }
+            if (body != null) {
+                byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+                conn.setRequestProperty("Content-Length", String.valueOf(bytes.length));
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(bytes);
+                    os.flush();
+                }
+            }
+
+            int code = conn.getResponseCode();
+            InputStream stream = (code >= 400) ? conn.getErrorStream() : conn.getInputStream();
+            StringBuilder response = new StringBuilder();
+            if (stream != null) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line).append('\n');
+                        if (response.length() > 65536) break;
+                    }
+                }
+            }
+
+            StringBuilder cookieBuilder = new StringBuilder();
+            List<String> setCookies = conn.getHeaderFields().get("Set-Cookie");
+            if (setCookies != null) {
+                for (String setCookie : setCookies) {
+                    if (setCookie == null) continue;
+                    int semicolon = setCookie.indexOf(';');
+                    String pair = (semicolon >= 0 ? setCookie.substring(0, semicolon) : setCookie).trim();
+                    if (pair.contains("=")) {
+                        if (cookieBuilder.length() > 0) cookieBuilder.append("; ");
+                        cookieBuilder.append(pair);
+                    }
+                }
+            }
+            return new HttpResult(code, response.toString(), cookieBuilder.toString(), conn.getHeaderField("Location"));
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static String mergeCookies(String first, String second) {
+        if (first == null || first.isEmpty()) return second == null ? "" : second;
+        if (second == null || second.isEmpty()) return first;
+        return first + "; " + second;
+    }
+
+    private static String extractXmlTag(String xml, String tag) {
+        if (xml == null || xml.isEmpty()) return "";
+        Pattern pattern = Pattern.compile("(?is)<" + Pattern.quote(tag) + "(?:\\s[^>]*)?>(.*?)</" + Pattern.quote(tag) + ">");
+        Matcher matcher = pattern.matcher(xml);
+        if (!matcher.find()) return "";
+        String value = matcher.group(1).trim();
+        if (value.startsWith("<![CDATA[") && value.endsWith("]]>")) {
+            value = value.substring(9, value.length() - 3).trim();
+        }
+        return value.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">");
+    }
+
+    private static String chooseLoginPath(String pageHtml, String pageUrl) {
+        String lower = pageHtml == null ? "" : pageHtml.toLowerCase(Locale.US);
+        // Sophos/Cyberoam client pages commonly submit JavaScript requests to login.xml.
+        if (lower.contains("login.xml")) return LOGIN_PATH;
+
+        if (pageHtml != null) {
+            Pattern actionPattern = Pattern.compile("(?is)<form\\b[^>]*\\baction\\s*=\\s*(['\"])(.*?)\\1");
+            Matcher actionMatcher = actionPattern.matcher(pageHtml);
+            if (actionMatcher.find()) {
+                String action = actionMatcher.group(2).trim();
+                if (!action.isEmpty() && !action.startsWith("#") && !action.toLowerCase(Locale.US).startsWith("javascript:")) {
+                    try {
+                        URI page = new URI(pageUrl);
+                        URI target = page.resolve(action);
+                        if (page.getHost().equalsIgnoreCase(target.getHost()) && page.getPort() == target.getPort()) {
+                            String path = target.getRawPath();
+                            if (path == null || path.isEmpty()) path = LOGIN_PATH;
+                            if (target.getRawQuery() != null) path += "?" + target.getRawQuery();
+                            return path;
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+        return LOGIN_PATH;
+    }
+
+    private static boolean looksLikeInvalidCredentials(String response) {
+        String lower = response == null ? "" : response.toLowerCase(Locale.US);
+        return lower.contains("invalid username or password")
+                || lower.contains("authentication failed")
+                || lower.contains("wrong username")
+                || lower.contains("invalid password")
+                || lower.contains("maximum login limit")
+                || lower.contains("maximum login");
+    }
+
+    private static boolean isQuotaExceeded(String response) {
+        String lower = response == null ? "" : response.toLowerCase(Locale.US);
+        return lower.contains("data transfer has been exceeded") || lower.contains("quota exceeded");
+    }
+
     public static AuthResult loginSync(Context context) {
         return loginSync(context, null, null, null);
     }
@@ -322,8 +463,13 @@ public final class HcuAuthHelper {
     }
 
     /**
-     * Core synchronous login execution.
-     * Prevents overlapping requests using IS_AUTHENTICATING lock.
+     * HCU/Sophos flow:
+     * 1) GET the portal page to establish cookies and inspect its form/scripts.
+     * 2) POST credentials to the authentication endpoint (normally /login.xml).
+     * 3) Complete a CHALLENGE response when the portal supplies a state token.
+     * 4) Verify access using the actual Wi-Fi network's HTTP 204 probe.
+     *
+     * A HTTP 200 page alone is never treated as a successful login.
      */
     public static AuthResult loginSync(Context context, Network network, String customUsername, String customPassword) {
         if (!IS_AUTHENTICATING.compareAndSet(false, true)) {
@@ -332,7 +478,7 @@ public final class HcuAuthHelper {
 
         try {
             String username = (customUsername != null && !customUsername.isEmpty())
-                    ? customUsername : getSavedUsername(context);
+                    ? customUsername.trim() : getSavedUsername(context);
             String password = (customPassword != null && !customPassword.isEmpty())
                     ? customPassword : getSavedPassword(context);
 
@@ -340,41 +486,115 @@ public final class HcuAuthHelper {
                 return new AuthResult(AuthResult.Status.INVALID_CREDENTIALS,
                         "Credentials missing: Enter username and password", null, null);
             }
+            if (!isWifiConnected(context)) {
+                return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
+                        "Wi-Fi is not connected yet", null, null);
+            }
 
-            Set<String> gatewaysToTry = new LinkedHashSet<>();
-            gatewaysToTry.add(PRIMARY_GATEWAY);  // 192.168.56.2 (Active Sophos Portal)
-            gatewaysToTry.add(FALLBACK_GATEWAY); // 10.4.0.1 (Secondary Gateway)
+            String ip = getLocalWifiIpAddress(context, network);
+            if (!isHcuSubnet(ip)) {
+                return new AuthResult(AuthResult.Status.NOT_IN_HCU_SUBNET,
+                        "Not on a recognised HCU Wi-Fi address (IP: " + ip + ")", null, null);
+            }
 
-            String lastError = "";
+            if (isOnline(network, context)) {
+                reportOnlineToAndroid(context, network);
+                return new AuthResult(AuthResult.Status.ALREADY_ONLINE,
+                        "Internet is already active (Wi-Fi IP: " + ip + ")", null, PRIMARY_GATEWAY);
+            }
 
-            for (String gateway : gatewaysToTry) {
+            String base = "http://" + PRIMARY_GATEWAY + ":" + PORT;
+            String pageUrl = base + PORTAL_PAGE_PATH;
+            HttpResult page = request(network, context, new URL(pageUrl), "GET", null, "", null);
+            String cookies = page.cookies;
+            String loginPath = chooseLoginPath(page.body, pageUrl);
+            String loginUrl = base + loginPath;
+
+            String form = "mode=191"
+                    + "&username=" + URLEncoder.encode(username, "UTF-8")
+                    + "&password=" + URLEncoder.encode(password, "UTF-8")
+                    + "&a=" + System.currentTimeMillis()
+                    + "&producttype=0";
+
+            HttpResult login = request(network, context, new URL(loginUrl), "POST", form, cookies, pageUrl);
+            cookies = mergeCookies(cookies, login.cookies);
+
+            String status = extractXmlTag(login.body, "status");
+            String state = extractXmlTag(login.body, "state");
+            String message = extractXmlTag(login.body, "message");
+
+            if ("CHALLENGE".equalsIgnoreCase(status) && !state.isEmpty()) {
+                String challengeForm = form + "&state=" + URLEncoder.encode(state, "UTF-8");
+                HttpResult challenge = request(network, context, new URL(loginUrl), "POST",
+                        challengeForm, cookies, pageUrl);
+                cookies = mergeCookies(cookies, challenge.cookies);
+                login = challenge;
+                status = extractXmlTag(login.body, "status");
+                state = extractXmlTag(login.body, "state");
+                message = extractXmlTag(login.body, "message");
+            } else if ("CHALLENGE".equalsIgnoreCase(status)) {
+                return new AuthResult(AuthResult.Status.ERROR,
+                        "Portal requested a challenge but did not provide a state token",
+                        "HTTP " + login.code + "; status=CHALLENGE; " + login.body, PRIMARY_GATEWAY);
+            }
+
+            if (looksLikeInvalidCredentials(login.body)) {
+                return new AuthResult(AuthResult.Status.INVALID_CREDENTIALS,
+                        "Portal rejected the credentials. Check the username/password or device login limit.",
+                        "HTTP " + login.code + "; " + login.body, PRIMARY_GATEWAY);
+            }
+            if (isQuotaExceeded(login.body)) {
+                return new AuthResult(AuthResult.Status.ERROR, "HCU portal reports a data quota limit",
+                        "HTTP " + login.code + "; " + login.body, PRIMARY_GATEWAY);
+            }
+
+            // Sophos live endpoint is useful as a second signal, but it is not the final success test.
+            String liveQuery = LIVE_PATH + "?mode=192"
+                    + "&username=" + URLEncoder.encode(username, "UTF-8")
+                    + "&a=" + System.currentTimeMillis()
+                    + "&producttype=0";
+            HttpResult live = request(network, context, new URL(base + liveQuery), "GET",
+                    null, cookies, pageUrl);
+            String liveAck = extractXmlTag(live.body, "ack");
+
+            boolean internetVerified = false;
+            for (int i = 0; i < 5; i++) {
+                if (isOnline(network, context)) {
+                    internetVerified = true;
+                    break;
+                }
                 try {
-                    Log.d(TAG, "Attempting Wi-Fi login against: " + gateway + ":" + PORT);
-                    AuthResult res = executeAuthRequest(network, context, gateway, username, password, true);
-
-                    if (res != null) {
-                        if (res.isSuccess()) {
-                            // Tell Android OS that internet is active so "Sign-in required" is cleared
-                            reportOnlineToAndroid(context, network);
-                            return res;
-                        }
-
-                        // Stop immediately on invalid credentials to prevent account lockout
-                        if (res.status == AuthResult.Status.INVALID_CREDENTIALS) {
-                            return res;
-                        }
-
-                        lastError = res.message;
-                    }
-                } catch (Exception e) {
-                    lastError = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-                    Log.w(TAG, "Gateway " + gateway + " connection failed: " + lastError);
+                    Thread.sleep(900);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
                 }
             }
 
-            return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
-                    "Could not connect to portal. Last error: " + lastError, null, null);
+            String diagnostic = "portalPage=HTTP " + page.code
+                    + ", auth=HTTP " + login.code
+                    + ", status=" + (status.isEmpty() ? "n/a" : status)
+                    + ", liveAck=" + (liveAck.isEmpty() ? "n/a" : liveAck)
+                    + (message.isEmpty() ? "" : ", message=" + message);
 
+            if (internetVerified) {
+                reportOnlineToAndroid(context, network);
+                return new AuthResult(AuthResult.Status.SUCCESS,
+                        "Signed in and internet access verified (IP: " + ip + ")",
+                        diagnostic + "\n" + login.body + "\n" + live.body, PRIMARY_GATEWAY);
+            }
+
+            String portalMessage = !message.isEmpty() ? message
+                    : (!login.body.isEmpty() ? login.body : "No readable portal response");
+            return new AuthResult(AuthResult.Status.ERROR,
+                    "Login request was sent, but internet access is still blocked. " + diagnostic,
+                    diagnostic + "\n" + portalMessage + "\n" + live.body, PRIMARY_GATEWAY);
+
+        } catch (Exception e) {
+            Log.w(TAG, "HCU authentication failed: " + e.getMessage(), e);
+            return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
+                    "Portal connection failed: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()),
+                    null, PRIMARY_GATEWAY);
         } finally {
             IS_AUTHENTICATING.set(false);
         }
@@ -386,111 +606,21 @@ public final class HcuAuthHelper {
 
     public static AuthResult logoutSync(Context context, Network network) {
         String username = getSavedUsername(context);
-        return executeAuthRequest(network, context, PRIMARY_GATEWAY, username, "", false);
-    }
-
-    private static AuthResult executeAuthRequest(Network network, Context context, String gatewayIp,
-                                                String username, String password, boolean isLogin) {
-        HttpURLConnection conn = null;
+        if (username.isEmpty()) {
+            return new AuthResult(AuthResult.Status.ERROR, "No saved username is available for logout", null, PRIMARY_GATEWAY);
+        }
         try {
-            long timestamp = System.currentTimeMillis();
-            String postBody;
-            if (isLogin) {
-                postBody = "mode=191"
-                        + "&username=" + URLEncoder.encode(username, "UTF-8")
-                        + "&password=" + URLEncoder.encode(password, "UTF-8")
-                        + "&a=" + timestamp
-                        + "&producttype=0";
-            } else {
-                postBody = "mode=192"
-                        + "&username=" + URLEncoder.encode(username, "UTF-8")
-                        + "&a=" + timestamp
-                        + "&producttype=0";
-            }
-
-            byte[] postData = postBody.getBytes(StandardCharsets.UTF_8);
-            URL url = new URL("http://" + gatewayIp + ":" + PORT + AUTH_PATH);
-
-            conn = openWifiConnection(network, context, url);
-            conn.setRequestMethod("POST");
-            conn.setDoOutput(true);
-            conn.setInstanceFollowRedirects(false);
-            conn.setConnectTimeout(3500);
-            conn.setReadTimeout(3500);
-            conn.setUseCaches(false);
-
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setRequestProperty("Content-Length", String.valueOf(postData.length));
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; rv:109.0)");
-            conn.setRequestProperty("Origin", "http://" + gatewayIp + ":" + PORT);
-            conn.setRequestProperty("Referer", "http://" + gatewayIp + ":" + PORT + "/httpclient.html");
-
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(postData);
-                os.flush();
-            }
-
-            int responseCode = conn.getResponseCode();
-            InputStream is = (responseCode >= 200 && responseCode < 400) ? conn.getInputStream() : conn.getErrorStream();
-            String responseBody = "";
-            if (is != null) {
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-                    StringBuilder sb = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        sb.append(line).append("\n");
-                    }
-                    responseBody = sb.toString();
-                }
-            }
-
-            if (isLogin) {
-                String lower = responseBody.toLowerCase(Locale.US);
-
-                if (lower.contains("invalid username or password") ||
-                    lower.contains("authentication failed") ||
-                    lower.contains("wrong username") ||
-                    lower.contains("invalid password")) {
-                    return new AuthResult(AuthResult.Status.INVALID_CREDENTIALS,
-                            "Invalid credentials: Check username & password", responseBody, gatewayIp);
-                }
-
-                // Explicit rejection: student has reached maximum simultaneous devices
-                if (lower.contains("maximum login limit") || lower.contains("maximum login")) {
-                    return new AuthResult(AuthResult.Status.INVALID_CREDENTIALS,
-                            "Login rejected: Maximum login limit reached on another device", responseBody, gatewayIp);
-                }
-
-                if (lower.contains("data transfer has been exceeded") || lower.contains("quota exceeded")) {
-                    return new AuthResult(AuthResult.Status.ERROR,
-                            "HCU Portal: Data quota exceeded", responseBody, gatewayIp);
-                }
-
-                // Verified successful authentication markers from Sophos CDATA
-                if (lower.contains("status><![cdata[live]]>") ||
-                    lower.contains("status>live") ||
-                    lower.contains("welcome! you have successfully") ||
-                    lower.contains("successfully logged in") ||
-                    lower.contains("you are signed in")) {
-                    return new AuthResult(AuthResult.Status.SUCCESS, "Signed in successfully!", responseBody, gatewayIp);
-                }
-
-                if (responseCode == 200 && isOnline(network, context)) {
-                    return new AuthResult(AuthResult.Status.SUCCESS, "Signed in (HTTP 200 confirmed)!", responseBody, gatewayIp);
-                }
-
-                return new AuthResult(AuthResult.Status.ERROR, "Portal response: HTTP " + responseCode, responseBody, gatewayIp);
-            } else {
-                return new AuthResult(AuthResult.Status.SUCCESS, "Logged out successfully.", responseBody, gatewayIp);
-            }
-
+            String body = "mode=192"
+                    + "&username=" + URLEncoder.encode(username, "UTF-8")
+                    + "&a=" + System.currentTimeMillis()
+                    + "&producttype=0";
+            String url = "http://" + PRIMARY_GATEWAY + ":" + PORT + AUTH_PATH;
+            HttpResult result = request(network, context, new URL(url), "POST", body, "", url);
+            return new AuthResult(AuthResult.Status.SUCCESS, "Logout request sent (HTTP " + result.code + ")",
+                    result.body, PRIMARY_GATEWAY);
         } catch (Exception e) {
             return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
-                    "Connection error to " + gatewayIp + ": " + e.getMessage(), null, gatewayIp);
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
-            }
+                    "Logout request failed: " + e.getMessage(), null, PRIMARY_GATEWAY);
         }
     }
 

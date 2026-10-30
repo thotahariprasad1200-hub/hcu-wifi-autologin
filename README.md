@@ -1,58 +1,77 @@
-# HCU Wi-Fi Auto-Login (Lite)
+# HCU Wi-Fi Auto-Login for Android
 
-An ultra-lightweight, zero-dependency native Android application designed specifically for Realme 7 (Android 12/13) to authenticate to the University of Hyderabad (HCU) Sophos Captive Portal Wi-Fi network.
+A lightweight Android app for automatically authenticating to the University of Hyderabad (HCU) Wi-Fi captive portal. It is designed for Android phones that automatically connect to saved campus Wi-Fi networks.
 
-## Key Features & Invariants
+## Version 1.4.4
 
-1. **Ultra-Lightweight Footprint (< 100 KB APK)**:
-   - Zero third-party dependencies (no AndroidX, no OkHttp, no Kotlin runtime).
-   - Pure standard Android SDK (`android.app.Activity`, `java.net.HttpURLConnection`, `android.service.quicksettings.TileService`, `android.appwidget.AppWidgetProvider`).
-2. **Instant 1-Tap Access**:
-   - **Quick Settings Tile**: Add the "HCU Wi-Fi" tile to your Android notification shade for 1-tap login from anywhere without opening the app.
-   - **Home Screen Widget**: Clean, minimal 2x1 widget for immediate authentication from the home screen.
-3. **Event-Driven Auto-Login**:
-   - `NetworkReceiver` automatically triggers login when your phone connects to the HCU Wi-Fi network (`10.4.*.*` subnet).
-   - Zero idle CPU/RAM usage: runs for ~1.2s to authenticate, then immediately terminates.
-4. **Sophos Captive Portal Parameters**:
-   - **Gateways**: Primary `192.168.56.2:8090`, Fallback `10.4.0.1:8090`.
-   - **Protocol**: Plain HTTP on port 8090 (`/httpclient.html`).
-   - **Probe**: `http://connectivitycheck.gstatic.com/generate_204` (HTTP 204 No Content).
-   - **Network Security Config**: Cleartext HTTP explicitly whitelisted for gateway IPs and Google connectivity probe.
-   - **Credential URL-Encoding**: Automatically handles special characters (e.g. `@`, `#` -> `%40%23`).
+### Authentication and reliability changes
+- Opens the HCU portal page first to establish the portal session and collect cookies.
+- Uses the Sophos-style `/login.xml` authentication endpoint rather than posting credentials to the portal display page.
+- Handles a portal `CHALLENGE` response when the portal supplies a state token.
+- Verifies actual internet access using the Wi-Fi network's connectivity probe before reporting login success.
+- Waits for DHCP to assign a recognised campus IP address and retries connection setup with bounded backoff.
+- Retries transient portal or network failures without repeating rejected credentials indefinitely.
+- Binds each HTTP request to the Wi-Fi `Network` object instead of globally binding the whole app process to Wi-Fi.
 
-## Project Layout
+### App features retained
+- Background foreground-service monitor for Wi-Fi connection changes.
+- Quick Settings tile for manual one-tap login.
+- Home-screen login widget.
+- Username and password settings.
+- Password encryption using Android Keystore (AES-GCM).
+- No SSID scanning or Location permission is required.
+
+## How it works
+
+1. Android connects to an available saved Wi-Fi network (Auto-connect must be enabled for that network in Android Wi-Fi settings).
+2. The app waits for the Wi-Fi network and its IP configuration to become ready.
+3. It checks whether the connection belongs to a supported HCU address range.
+4. It loads the captive portal page, submits the saved credentials using the portal authentication endpoint, and handles a supported challenge response.
+5. It checks for actual internet access before displaying a successful sign-in status.
+
+The app does not select or switch Wi-Fi SSIDs itself. Android handles saved-network selection.
+
+## Project layout
 
 ```
-hcu_wifi_lite/
+hcu-wifi-autologin/
+├── .github/workflows/build.yml
 ├── app/
 │   ├── build.gradle
-│   ├── proguard-rules.pro
 │   └── src/main/
 │       ├── AndroidManifest.xml
 │       ├── java/edu/uoh/hcuwifi/
-│       │   ├── HcuAuthHelper.java       # Core HTTP connection and portal parsing logic
-│       │   ├── MainActivity.java        # Pure Android UI with status & diagnostic console
-│       │   ├── HcuTileService.java      # Quick Settings Tile provider
-│       │   ├── HcuWidgetProvider.java   # Home screen widget provider
-│       │   └── NetworkReceiver.java     # Connectivity broadcast receiver
+│       │   ├── HcuAuthHelper.java
+│       │   ├── HcuForegroundService.java
+│       │   ├── MainActivity.java
+│       │   ├── HcuTileService.java
+│       │   ├── HcuWidgetProvider.java
+│       │   ├── BootReceiver.java
+│       │   └── SecureStorage.java
 │       └── res/
-│           ├── drawable/                # Vector drawables and shape backgrounds
-│           ├── layout/                  # Activity and widget layouts
-│           ├── values/                  # Strings, colors, styles (Material Light)
-│           └── xml/                     # Network security config and widget provider info
 ├── build.gradle
 ├── gradle.properties
 └── settings.gradle
 ```
 
-## Building the APK
+## Build
 
-Open the project in Android Studio or build via Gradle command line:
+The GitHub Actions workflow uses Java 17 and Gradle 8.2:
 
 ```bash
-# Debug APK
-./gradlew assembleDebug
-
-# Optimized Release APK (< 100 KB)
-./gradlew assembleRelease
+gradle clean assembleRelease
 ```
+
+The signed release APK is generated at:
+
+```
+app/build/outputs/apk/release/app-release.apk
+```
+
+A tagged version matching `v*` is published as a GitHub Release by the workflow. A normal branch build uploads the APK and SHA-256 checksum as a GitHub Actions artifact.
+
+## Important security note
+
+The campus captive portal endpoint is HTTP, not HTTPS. Credentials are therefore not encrypted in transit between the phone and the campus portal. The app encrypts the stored password on the device, but local encryption does not protect the HTTP request on the network. Use this app only on the intended university network.
+
+The signing keystore currently used for update compatibility has previously been present in this public repository. Treat it as exposed and plan a signing-key rotation. Rotating the key requires uninstalling the existing app before installing an APK signed with the new key.
