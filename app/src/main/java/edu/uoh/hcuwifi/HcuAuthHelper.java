@@ -50,7 +50,7 @@ public final class HcuAuthHelper {
     public static final String PRIMARY_GATEWAY = "192.168.56.2";
     public static final String FALLBACK_GATEWAY = "10.4.0.1";
     public static final int PORT = 8090;
-    public static final String AUTH_PATH = "/httpclient.html";
+    public static final String AUTH_PATH = "/login.xml";
 
     // Connectivity probe endpoint (Google captive portal probe)
     public static final String PROBE_URL = "http://connectivitycheck.gstatic.com/generate_204";
