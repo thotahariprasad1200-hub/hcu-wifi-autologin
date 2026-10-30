@@ -169,22 +169,13 @@ public final class HcuAuthHelper {
         throw new IOException("No active Wi-Fi connection found. Refusing to route traffic over Mobile Data.");
     }
 
+    /**
+     * Compatibility helper. Requests are bound individually with Network.openConnection();
+     * process-wide binding is deliberately avoided so background app traffic is not trapped
+     * on a captive Wi-Fi network or sent over the wrong network after a handoff.
+     */
     public static boolean bindToWifi(Context context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && context != null) {
-            try {
-                ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-                if (cm != null) {
-                    Network wifiNet = getWifiNetwork(context);
-                    if (wifiNet != null) {
-                        cm.bindProcessToNetwork(wifiNet);
-                        return true;
-                    }
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to bind to Wi-Fi: " + e.getMessage());
-            }
-        }
-        return false;
+        return getWifiNetwork(context) != null;
     }
 
     public static boolean isWifiConnected(Context context) {
