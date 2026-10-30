@@ -83,7 +83,10 @@ public final class SecureStorage {
                     .apply();
 
         } catch (Exception e) {
-            Log.e(TAG, "Failed to encrypt password with Keystore: " + e.getMessage());
+            // Never leave an older password in place after a failed save.
+            prefs.edit().remove(PREF_ENC_PASS).remove(PREF_ENC_IV)
+                    .remove(HcuAuthHelper.KEY_PASSWORD).apply();
+            Log.e(TAG, "Failed to encrypt password; cleared stale stored value", e);
         }
     }
 

@@ -166,9 +166,18 @@ public class MainActivity extends Activity {
             } else {
                 HcuForegroundService.stop(this);
             }
-            appendLog("Credentials saved. User: " + u + ", Auto-Login: " + auto);
-            Toast.makeText(this, "Saved! Authenticating...", Toast.LENGTH_SHORT).show();
-            performLogin();
+            appendLog("Credentials saved. Auto-Login: " + auto);
+            Toast.makeText(this,
+                    auto ? "Saved. Automatic sign-in will run when HCU Wi-Fi connects."
+                         : "Saved. Automatic sign-in is disabled.",
+                    Toast.LENGTH_LONG).show();
+            if (auto) {
+                Network network = HcuAuthHelper.getWifiNetwork(this);
+                if (network != null) {
+                    // The background service performs the single automatic attempt.
+                    HcuForegroundService.start(this);
+                }
+            }
         });
 
         btnLogin.setOnClickListener(v -> performLogin());
@@ -198,10 +207,8 @@ public class MainActivity extends Activity {
                     appendLog("Wi-Fi connected. Refreshing status...");
                     HcuAuthHelper.bindToWifi(MainActivity.this);
                     refreshStatus();
-                    if (swAutoLogin.isChecked() && HcuAuthHelper.isConnectedToHcuSubnet(MainActivity.this)) {
-                        appendLog("Auto-login triggered by Wi-Fi connection...");
-                        performLogin();
-                    }
+                    // The foreground monitor owns automatic authentication.
+                    // The Activity only refreshes the visible status to avoid duplicate logins.
                 });
             }
 
@@ -258,8 +265,8 @@ public class MainActivity extends Activity {
                 updateStatusDisplay(false, "HCU Subnet Detected - Login Required", ip);
                 appendLog("[Status] Offline on HCU Wi-Fi (IP: " + ip + "). Ready to login.");
             } else {
-                updateStatusDisplay(false, "Not in HCU Subnet (" + ip + ")", ip);
-                appendLog("[Status] Offline / Non-HCU IP: " + ip);
+                updateStatusDisplay(false, "Wi-Fi connected — portal check runs in background", ip);
+                appendLog("[Status] Wi-Fi is not validated yet. The background monitor checks the HCU portal before sending credentials.");
             }
         });
     }
