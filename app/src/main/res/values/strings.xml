@@ -1,34 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hari Auto Login</string>
-    <string name="app_subtitle">University of Hyderabad Wi-Fi • Automatic Login</string>
-    <string name="branding_footer">Designed and developed by Hari 🤍 🎀</string>
-    
+    <string name="app_name">Hari Auto Login 📶🚀</string>
+    <string name="app_subtitle">HCU Automatic Wi-Fi Login Always On ❤️</string>
+    <string name="branding_footer">Designed and developed by Hari🤍🎀</string>
     <string name="tile_label">Hari Auto Login</string>
     <string name="tile_logging_in">Logging in...</string>
     <string name="tile_online">Hari: Online</string>
     <string name="tile_offline">Hari: Offline</string>
-
-    <string name="status_title">Wi-Fi Connection Status</string>
-    <string name="status_checking">Checking Wi-Fi status...</string>
-    <string name="status_online_text">Online (Internet Active)</string>
-    <string name="status_offline_text">Offline (Login Required)</string>
-    <string name="status_not_hcu">Not on Campus Wi-Fi</string>
-
+    <string name="status_title">Connection</string>
+    <string name="status_checking">Checking your Wi-Fi connection...</string>
+    <string name="status_online_text">Connected · Internet is working</string>
+    <string name="status_offline_text">Waiting for HCU Wi-Fi sign-in</string>
+    <string name="status_not_hcu">Connect to HCU campus Wi-Fi</string>
     <string name="ip_label">Wi-Fi IP:</string>
     <string name="gateway_label">Gateway:</string>
     <string name="gateway_val">192.168.56.2:8090</string>
-
-    <string name="credentials_title">Enter Your Campus Credentials</string>
-    <string name="username_hint">Username / ID (e.g. 26love10)</string>
-    <string name="password_hint">Password</string>
-    <string name="save_credentials">Save &amp; Start Auto-Login</string>
-    <string name="auto_login_label">Fully Automatic Login on Wi-Fi Connect</string>
-
-    <string name="btn_login">Login Now</string>
+    <string name="credentials_title">Campus account</string>
+    <string name="username_hint">HCU username / ID</string>
+    <string name="password_hint">HCU password</string>
+    <string name="save_credentials">Save settings</string>
+    <string name="auto_login_label">Enable automatic login</string>
+    <string name="btn_login">Login now</string>
     <string name="btn_logout">Logout</string>
-    <string name="btn_probe">Test Wi-Fi Status</string>
-
-    <string name="log_title">Live Activity Log</string>
+    <string name="btn_probe">Check connection</string>
+    <string name="log_title">Recent activity</string>
     <string name="btn_clear_log">Clear</string>
 </resources>
