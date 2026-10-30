@@ -59,11 +59,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish GitHub Release for version tags
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish GitHub Release v1.5.0
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/release/v1.5.0'
         uses: softprops/action-gh-release@v2
         with:
-          name: "HCU Wi-Fi Auto-Login ${{ github.ref_name }}"
+          tag_name: v1.5.0
+          target_commitish: ${{ github.sha }}
+          name: "HCU Wi-Fi Auto-Login v1.5.0"
           generate_release_notes: true
           files: |
             dist/HCU_WiFi_AutoLogin.apk
