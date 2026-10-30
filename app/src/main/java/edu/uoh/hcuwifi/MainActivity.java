@@ -167,8 +167,17 @@ public class MainActivity extends Activity {
                 HcuForegroundService.stop(this);
             }
             appendLog("Credentials saved. Auto-Login: " + auto);
-            Toast.makeText(this, "Saved! Authenticating...", Toast.LENGTH_SHORT).show();
-            performLogin();
+            Toast.makeText(this,
+                    auto ? "Saved. Automatic sign-in will run when HCU Wi-Fi connects."
+                         : "Saved. Automatic sign-in is disabled.",
+                    Toast.LENGTH_LONG).show();
+            if (auto) {
+                Network network = HcuAuthHelper.getWifiNetwork(this);
+                if (network != null) {
+                    // The background service performs the single automatic attempt.
+                    HcuForegroundService.start(this);
+                }
+            }
         });
 
         btnLogin.setOnClickListener(v -> performLogin());
