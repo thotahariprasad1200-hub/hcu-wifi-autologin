@@ -1,9 +1,50 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="24dp"
-    android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-  <path
-      android:fillColor="#EC4899"
-      android:pathData="M12,4C7.31,4 3.07,5.9 0,8.98L12,21L24,8.98C20.93,5.9 16.69,4 12,4ZM12,6C15.86,6 19.34,7.49 21.99,9.94L12,19.95L2.01,9.94C4.66,7.49 8.14,6 12,6ZM12,10C9.79,10 7.76,10.86 6.26,12.27L12,18.02L17.74,12.27C16.24,10.86 14.21,10 12,10Z"/>
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Vibrant Pink Squircle Base -->
+    <path
+        android:fillColor="#EC4899"
+        android:pathData="M 32,10 L 76,10 A 22,22 0 0 1 98,32 L 98,76 A 22,22 0 0 1 76,98 L 32,98 A 22,22 0 0 1 10,76 L 10,32 A 22,22 0 0 1 32,10 Z" />
+
+    <!-- Soft Top Glow for Depth -->
+    <path
+        android:fillColor="#F472B6"
+        android:fillAlpha="0.45"
+        android:pathData="M 32,10 L 76,10 A 22,22 0 0 1 98,32 L 98,52 L 10,52 L 10,32 A 22,22 0 0 1 32,10 Z" />
+
+    <!-- Cute Magic Twinkle Star (Top Right) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 83,18 Q 83,23 88,23 Q 83,23 83,28 Q 83,23 78,23 Q 83,23 83,18 Z" />
+
+    <!-- Cute Soft Twinkle Star (Top Left) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.75"
+        android:pathData="M 25,24 Q 25,27 28,27 Q 25,27 25,30 Q 25,27 22,27 Q 25,27 25,24 Z" />
+
+    <!-- Outer Wi-Fi Broadcast Arc -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 27,42 A 38,38 0 0 1 81,42" />
+
+    <!-- Middle Wi-Fi Broadcast Arc -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 37,54 A 24,24 0 0 1 71,54" />
+
+    <!-- Cute Heart Connection Beacon at Center -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 54,80 C 54,80 44,72 44,65 C 44,61 47,58 51,58 C 53.2,58 54,59.5 54,59.5 C 54,59.5 54.8,58 57,58 C 61,58 64,61 64,65 C 64,72 54,80 54,80 Z" />
+
 </vector>

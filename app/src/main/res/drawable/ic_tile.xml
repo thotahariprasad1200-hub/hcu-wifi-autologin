@@ -3,7 +3,24 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-  <path
-      android:fillColor="#FFFFFFFF"
-      android:pathData="M12,4C7.31,4 3.07,5.9 0,8.98L12,21L24,8.98C20.93,5.9 16.69,4 12,4ZM12,6C15.86,6 19.34,7.49 21.99,9.94L12,19.95L2.01,9.94C4.66,7.49 8.14,6 12,6ZM12,10C9.79,10 7.76,10.86 6.26,12.27L12,18.02L17.74,12.27C16.24,10.86 14.21,10 12,10Z"/>
+
+    <!-- Outer Wi-Fi Arc -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M 3,8 A 12,12 0 0 1 21,8" />
+
+    <!-- Middle Wi-Fi Arc -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M 6.5,12 A 7.5,7.5 0 0 1 17.5,12" />
+
+    <!-- Center Heart Beacon -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 12,20 C 12,20 8.5,17 8.5,14.5 C 8.5,13 9.8,12 11,12 C 11.6,12 12,12.5 12,12.5 C 12,12.5 12.4,12 13,12 C 14.2,12 15.5,13 15.5,14.5 C 15.5,17 12,20 12,20 Z" />
+
 </vector>
