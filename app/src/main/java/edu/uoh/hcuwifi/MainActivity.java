@@ -166,7 +166,7 @@ public class MainActivity extends Activity {
             } else {
                 HcuForegroundService.stop(this);
             }
-            appendLog("Credentials saved. User: " + u + ", Auto-Login: " + auto);
+            appendLog("Credentials saved. Auto-Login: " + auto);
             Toast.makeText(this, "Saved! Authenticating...", Toast.LENGTH_SHORT).show();
             performLogin();
         });
@@ -198,10 +198,8 @@ public class MainActivity extends Activity {
                     appendLog("Wi-Fi connected. Refreshing status...");
                     HcuAuthHelper.bindToWifi(MainActivity.this);
                     refreshStatus();
-                    if (swAutoLogin.isChecked() && HcuAuthHelper.isConnectedToHcuSubnet(MainActivity.this)) {
-                        appendLog("Auto-login triggered by Wi-Fi connection...");
-                        performLogin();
-                    }
+                    // The foreground monitor owns automatic authentication.
+                    // The Activity only refreshes the visible status to avoid duplicate logins.
                 });
             }
 
