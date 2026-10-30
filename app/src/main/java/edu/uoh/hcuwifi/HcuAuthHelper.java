@@ -138,18 +138,64 @@ public final class HcuAuthHelper {
         if (context == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null;
         try {
             ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm != null) {
-                for (Network net : cm.getAllNetworks()) {
-                    NetworkCapabilities caps = cm.getNetworkCapabilities(net);
-                    if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-                        return net;
+            if (cm == null) return null;
+
+            // Prefer Android's default network when it is Wi-Fi. This prevents selecting
+            // an old/stale Wi-Fi Network while the phone is using another transport.
+            Network active = cm.getActiveNetwork();
+            NetworkCapabilities activeCaps = active != null ? cm.getNetworkCapabilities(active) : null;
+            if (activeCaps != null && activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                return active;
+            }
+
+            // A captive Wi-Fi network may not be the default route while mobile data is
+            // validated. Select only a currently-present Wi-Fi network with an IPv4 address.
+            Network fallback = null;
+            for (Network candidate : cm.getAllNetworks()) {
+                NetworkCapabilities caps = cm.getNetworkCapabilities(candidate);
+                if (caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue;
+                LinkProperties lp = cm.getLinkProperties(candidate);
+                if (lp == null) continue;
+                boolean hasIpv4 = false;
+                for (LinkAddress address : lp.getLinkAddresses()) {
+                    InetAddress ip = address.getAddress();
+                    if (ip instanceof Inet4Address && !ip.isLoopbackAddress()
+                            && !ip.isLinkLocalAddress() && !"0.0.0.0".equals(ip.getHostAddress())) {
+                        hasIpv4 = true;
+                        break;
                     }
                 }
+                if (!hasIpv4) continue;
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return candidate;
+                if (fallback == null) fallback = candidate;
             }
+            return fallback;
         } catch (Exception e) {
-            Log.w(TAG, "Error resolving Wi-Fi network: " + e.getMessage());
+            Log.w(TAG, "Error resolving Wi-Fi network", e);
+            return null;
         }
-        return null;
+    }
+
+    public static boolean isWifiNetwork(Context context, Network network) {
+        if (context == null || network == null) return false;
+        try {
+            ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            NetworkCapabilities caps = cm != null ? cm.getNetworkCapabilities(network) : null;
+            return caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public static boolean isNetworkValidated(Context context, Network network) {
+        if (context == null || network == null) return false;
+        try {
+            ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            NetworkCapabilities caps = cm != null ? cm.getNetworkCapabilities(network) : null;
+            return caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**
@@ -236,8 +282,16 @@ public final class HcuAuthHelper {
         return "0.0.0.0";
     }
 
+    /**
+     * Known address ranges observed on HCU Wi-Fi devices. This is only a UI hint;
+     * authentication is gated by the actual HCU portal response, not by a broad
+     * RFC1918/10.x address test.
+     */
     public static boolean isHcuSubnet(String ip) {
-        return ip != null && (ip.startsWith("10.") || ip.startsWith("192.168.56."));
+        if (ip == null) return false;
+        return ip.startsWith("10.1.6.")
+                || ip.startsWith("10.4.")
+                || ip.startsWith("192.168.56.");
     }
 
     public static boolean isConnectedToHcuSubnet(Context context) {
@@ -272,8 +326,8 @@ public final class HcuAuthHelper {
             URL url = new URL(PROBE_URL);
             conn = openWifiConnection(network, context, url);
             conn.setInstanceFollowRedirects(false);
-            conn.setConnectTimeout(3000);
-            conn.setReadTimeout(3000);
+            conn.setConnectTimeout(1200);
+            conn.setReadTimeout(1200);
             conn.setUseCaches(false);
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; rv:109.0)");
             int code = conn.getResponseCode();
@@ -296,9 +350,10 @@ public final class HcuAuthHelper {
     }
 
     public static AuthResult probeConnectivity(Context context, Network network) {
-        String ip = getLocalWifiIpAddress(context);
+        Network wifi = network != null ? network : getWifiNetwork(context);
+        String ip = getLocalWifiIpAddress(context, wifi);
         boolean inHcu = isHcuSubnet(ip);
-        boolean online = isOnline(network, context);
+        boolean online = isNetworkValidated(context, wifi) || isOnline(wifi, context);
 
         if (online) {
             reportOnlineToAndroid(context, network);
@@ -339,8 +394,8 @@ public final class HcuAuthHelper {
             conn = openWifiConnection(network, context, url);
             conn.setRequestMethod(method);
             conn.setInstanceFollowRedirects(false);
-            conn.setConnectTimeout(5000);
-            conn.setReadTimeout(5000);
+            conn.setConnectTimeout(1800);
+            conn.setReadTimeout(1800);
             conn.setUseCaches(false);
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36");
             conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml,text/xml,*/*");
@@ -375,10 +430,14 @@ public final class HcuAuthHelper {
                 }
             }
 
+            // Header map key casing is implementation-dependent; find Set-Cookie
+            // case-insensitively and retain only cookie name/value pairs.
             StringBuilder cookieBuilder = new StringBuilder();
-            List<String> setCookies = conn.getHeaderFields().get("Set-Cookie");
-            if (setCookies != null) {
-                for (String setCookie : setCookies) {
+            for (java.util.Map.Entry<String, List<String>> header : conn.getHeaderFields().entrySet()) {
+                if (header.getKey() == null || !"set-cookie".equalsIgnoreCase(header.getKey())) continue;
+                List<String> values = header.getValue();
+                if (values == null) continue;
+                for (String setCookie : values) {
                     if (setCookie == null) continue;
                     int semicolon = setCookie.indexOf(';');
                     String pair = (semicolon >= 0 ? setCookie.substring(0, semicolon) : setCookie).trim();
@@ -471,44 +530,88 @@ public final class HcuAuthHelper {
      *
      * A HTTP 200 page alone is never treated as a successful login.
      */
+    private static boolean looksLikeHcuPortal(String html) {
+        if (html == null || html.trim().isEmpty()) return false;
+        String lower = html.toLowerCase(Locale.US);
+        boolean vendorMarker = lower.contains("sophos") || lower.contains("cyberoam")
+                || lower.contains("login.xml") || lower.contains("mode=191");
+        boolean credentialForm = lower.contains("username") && lower.contains("password")
+                && lower.contains("login");
+        return vendorMarker || credentialForm;
+    }
+
+    private static boolean samePortalOrigin(URL original, URL redirect) {
+        return original != null && redirect != null
+                && "http".equalsIgnoreCase(redirect.getProtocol())
+                && original.getHost().equalsIgnoreCase(redirect.getHost())
+                && original.getPort() == redirect.getPort();
+    }
+
     public static AuthResult loginSync(Context context, Network network, String customUsername, String customPassword) {
+        if (context == null) {
+            return new AuthResult(AuthResult.Status.ERROR, "App context is unavailable", null, null);
+        }
         if (!IS_AUTHENTICATING.compareAndSet(false, true)) {
             return new AuthResult(AuthResult.Status.BUSY, "Authentication already in progress", null, null);
         }
 
         try {
-            String username = (customUsername != null && !customUsername.isEmpty())
-                    ? customUsername.trim() : getSavedUsername(context);
-            String password = (customPassword != null && !customPassword.isEmpty())
-                    ? customPassword : getSavedPassword(context);
-
-            if (username.isEmpty() || password.isEmpty()) {
-                return new AuthResult(AuthResult.Status.INVALID_CREDENTIALS,
-                        "Credentials missing: Enter username and password", null, null);
-            }
-            if (!isWifiConnected(context)) {
+            Network wifi = network != null ? network : getWifiNetwork(context);
+            if (!isWifiNetwork(context, wifi)) {
                 return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
                         "Wi-Fi is not connected yet", null, null);
             }
 
-            String ip = getLocalWifiIpAddress(context, network);
-            if (!isHcuSubnet(ip)) {
-                return new AuthResult(AuthResult.Status.NOT_IN_HCU_SUBNET,
-                        "Not on a recognised HCU Wi-Fi address (IP: " + ip + ")", null, null);
+            String username = (customUsername != null && !customUsername.isEmpty())
+                    ? customUsername.trim() : getSavedUsername(context);
+            String password = (customPassword != null && !customPassword.isEmpty())
+                    ? customPassword : getSavedPassword(context);
+            if (username.isEmpty() || password.isEmpty()) {
+                return new AuthResult(AuthResult.Status.INVALID_CREDENTIALS,
+                        "Saved username or password is missing. Open the app once to save them.", null, null);
             }
 
-            if (isOnline(network, context)) {
-                reportOnlineToAndroid(context, network);
+            String ip = getLocalWifiIpAddress(context, wifi);
+            // This fast OS signal avoids an unnecessary HTTP exchange on already validated Wi-Fi.
+            if (isNetworkValidated(context, wifi)) {
+                reportOnlineToAndroid(context, wifi);
                 return new AuthResult(AuthResult.Status.ALREADY_ONLINE,
                         "Internet is already active (Wi-Fi IP: " + ip + ")", null, PRIMARY_GATEWAY);
             }
 
+            // Probe the fixed HCU captive-portal endpoint first. Do not send credentials
+            // merely because an unrelated Wi-Fi network happens to use a 10.x address.
             String base = "http://" + PRIMARY_GATEWAY + ":" + PORT;
             String pageUrl = base + PORTAL_PAGE_PATH;
-            HttpResult page = request(network, context, new URL(pageUrl), "GET", null, "", null);
+            HttpResult page = request(wifi, context, new URL(pageUrl), "GET", null, "", null);
+
+            // Follow only same-origin redirects; never forward credentials or cookies to
+            // an unrelated host returned by a captive portal.
+            if (page.code >= 300 && page.code < 400 && !page.location.isEmpty()) {
+                URL original = new URL(pageUrl);
+                URL redirected = new URL(original, page.location);
+                if (samePortalOrigin(original, redirected)) {
+                    pageUrl = redirected.toString();
+                    page = request(wifi, context, redirected, "GET", null, page.cookies, original.toString());
+                }
+            }
+
+            if (page.code < 200 || page.code >= 300 || !looksLikeHcuPortal(page.body)) {
+                return new AuthResult(AuthResult.Status.NOT_IN_HCU_SUBNET,
+                        "This Wi-Fi does not expose the HCU login portal. No credentials were sent.",
+                        "Portal probe: HTTP " + page.code + ", expected HCU/Sophos login page.",
+                        PRIMARY_GATEWAY);
+            }
+
             String cookies = page.cookies;
             String loginPath = chooseLoginPath(page.body, pageUrl);
-            String loginUrl = base + loginPath;
+            URL pageUri = new URL(pageUrl);
+            URL loginUrl = new URL(pageUri, loginPath);
+            if (!samePortalOrigin(pageUri, loginUrl)) {
+                return new AuthResult(AuthResult.Status.ERROR,
+                        "Portal supplied an unexpected login destination; credentials were not sent.",
+                        null, PRIMARY_GATEWAY);
+            }
 
             String form = "mode=191"
                     + "&username=" + URLEncoder.encode(username, "UTF-8")
@@ -516,7 +619,7 @@ public final class HcuAuthHelper {
                     + "&a=" + System.currentTimeMillis()
                     + "&producttype=0";
 
-            HttpResult login = request(network, context, new URL(loginUrl), "POST", form, cookies, pageUrl);
+            HttpResult login = request(wifi, context, loginUrl, "POST", form, cookies, pageUrl);
             cookies = mergeCookies(cookies, login.cookies);
 
             String status = extractXmlTag(login.body, "status");
@@ -525,80 +628,70 @@ public final class HcuAuthHelper {
 
             if ("CHALLENGE".equalsIgnoreCase(status) && !state.isEmpty()) {
                 String challengeForm = form + "&state=" + URLEncoder.encode(state, "UTF-8");
-                HttpResult challenge = request(network, context, new URL(loginUrl), "POST",
-                        challengeForm, cookies, pageUrl);
-                cookies = mergeCookies(cookies, challenge.cookies);
-                login = challenge;
+                login = request(wifi, context, loginUrl, "POST", challengeForm, cookies, pageUrl);
+                cookies = mergeCookies(cookies, login.cookies);
                 status = extractXmlTag(login.body, "status");
-                state = extractXmlTag(login.body, "state");
                 message = extractXmlTag(login.body, "message");
             } else if ("CHALLENGE".equalsIgnoreCase(status)) {
                 return new AuthResult(AuthResult.Status.ERROR,
-                        "Portal requested a challenge but did not provide a state token",
-                        "HTTP " + login.code + "; status=CHALLENGE; " + login.body, PRIMARY_GATEWAY);
+                        "Portal requested a challenge but did not return its state token.",
+                        "HTTP " + login.code + "; status=CHALLENGE", PRIMARY_GATEWAY);
             }
 
-            if (looksLikeInvalidCredentials(login.body)) {
+            if (looksLikeInvalidCredentials(login.body) || "AUTH_FAILED".equalsIgnoreCase(status)
+                    || "FAILED".equalsIgnoreCase(status)) {
                 return new AuthResult(AuthResult.Status.INVALID_CREDENTIALS,
-                        "Portal rejected the credentials. Check the username/password or device login limit.",
-                        "HTTP " + login.code + "; " + login.body, PRIMARY_GATEWAY);
+                        "HCU portal rejected the saved credentials. Check them in the app.",
+                        "HTTP " + login.code + "; status=" + status + "; " + message, PRIMARY_GATEWAY);
             }
             if (isQuotaExceeded(login.body)) {
                 return new AuthResult(AuthResult.Status.ERROR, "HCU portal reports a data quota limit",
-                        "HTTP " + login.code + "; " + login.body, PRIMARY_GATEWAY);
+                        "HTTP " + login.code + "; " + message, PRIMARY_GATEWAY);
             }
 
-            // Sophos live endpoint is useful as a second signal, but it is not the final success test.
-            String liveQuery = LIVE_PATH + "?mode=192"
-                    + "&username=" + URLEncoder.encode(username, "UTF-8")
-                    + "&a=" + System.currentTimeMillis()
-                    + "&producttype=0";
-            HttpResult live = request(network, context, new URL(base + liveQuery), "GET",
-                    null, cookies, pageUrl);
-            String liveAck = extractXmlTag(live.body, "ack");
-
-            boolean internetVerified = false;
-            for (int i = 0; i < 5; i++) {
-                if (isOnline(network, context)) {
-                    internetVerified = true;
-                    break;
-                }
-                try {
-                    Thread.sleep(900);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    break;
+            // A portal XML status is not proof of Internet access. Confirm the Wi-Fi path
+            // itself; the short bounded check avoids a long fixed sleep after a fast login.
+            boolean internetVerified = isNetworkValidated(context, wifi);
+            for (int i = 0; !internetVerified && i < 4; i++) {
+                internetVerified = isOnline(wifi, context);
+                if (!internetVerified && i < 3) {
+                    try {
+                        Thread.sleep(250);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                 }
             }
 
-            String diagnostic = "portalPage=HTTP " + page.code
+            String diagnostic = "portal=HTTP " + page.code
                     + ", auth=HTTP " + login.code
                     + ", status=" + (status.isEmpty() ? "n/a" : status)
-                    + ", liveAck=" + (liveAck.isEmpty() ? "n/a" : liveAck)
                     + (message.isEmpty() ? "" : ", message=" + message);
 
             if (internetVerified) {
-                reportOnlineToAndroid(context, network);
+                reportOnlineToAndroid(context, wifi);
                 return new AuthResult(AuthResult.Status.SUCCESS,
-                        "Signed in and internet access verified (IP: " + ip + ")",
-                        diagnostic + "\n" + login.body + "\n" + live.body, PRIMARY_GATEWAY);
+                        "HCU sign-in complete; Internet access verified (IP: " + ip + ")",
+                        diagnostic, PRIMARY_GATEWAY);
             }
 
-            String portalMessage = !message.isEmpty() ? message
-                    : (!login.body.isEmpty() ? login.body : "No readable portal response");
             return new AuthResult(AuthResult.Status.ERROR,
-                    "Login request was sent, but internet access is still blocked. " + diagnostic,
-                    diagnostic + "\n" + portalMessage + "\n" + live.body, PRIMARY_GATEWAY);
+                    "The portal accepted a request, but Android could not verify Internet access. " + diagnostic,
+                    diagnostic, PRIMARY_GATEWAY);
 
         } catch (Exception e) {
-            Log.w(TAG, "HCU authentication failed: " + e.getMessage(), e);
+            Log.w(TAG, "HCU authentication failed: " + e.getMessage());
             return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
-                    "Portal connection failed: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()),
+                    "HCU portal is not reachable yet: "
+                            + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()),
                     null, PRIMARY_GATEWAY);
         } finally {
             IS_AUTHENTICATING.set(false);
         }
     }
+
+
 
     public static AuthResult logoutSync(Context context) {
         return logoutSync(context, null);
