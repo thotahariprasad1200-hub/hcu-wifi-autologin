@@ -142,7 +142,7 @@ public class MainActivity extends Activity {
                 Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
                 intent.setData(Uri.parse("package:" + getPackageName()));
                 startActivity(intent);
-                Toast.makeText(this, "Set Battery to 'Allow background activity' & enable 'Auto-launch'", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Set Battery to 'Unrestricted' and enable 'Allow background activity'", Toast.LENGTH_LONG).show();
             } catch (Exception e) {
                 try {
                     startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));

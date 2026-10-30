@@ -319,13 +319,13 @@
         android:orientation="vertical"
         android:gravity="center">
 
-        <!-- Realme 24/7 background settings button -->
+        <!-- Universal phone background settings button -->
         <Button
             android:id="@+id/btn_realme_settings"
             android:layout_width="wrap_content"
             android:layout_height="32dp"
             android:background="@null"
-            android:text="⚙️ Realme: Allow 24/7 Background Activity"
+            android:text="⚙️ Phone Settings: Allow Background Activity"
             android:textColor="@color/primary"
             android:textSize="11sp"
             android:textAllCaps="false"
