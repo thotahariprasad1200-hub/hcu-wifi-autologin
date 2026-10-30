@@ -528,6 +528,57 @@ public final class HcuAuthHelper {
         return lower.contains("data transfer has been exceeded") || lower.contains("quota exceeded");
     }
 
+    /** Campus VLANs differ by building; order gateways by the address the phone actually got. */
+    private static String[] gatewayBasesFor(String localIp) {
+        String primary = "http://" + PRIMARY_GATEWAY + ":" + PORT;
+        String fallback = "http://" + FALLBACK_GATEWAY + ":" + PORT;
+        if (localIp != null && localIp.startsWith("10.4.")) {
+            return new String[]{fallback, primary};
+        }
+        return new String[]{primary, fallback};
+    }
+
+    private static final class PortalPage {
+        final String base;
+        final String pageUrl;
+        final HttpResult http;
+
+        PortalPage(String base, String pageUrl, HttpResult http) {
+            this.base = base;
+            this.pageUrl = pageUrl;
+            this.http = http;
+        }
+    }
+
+    /**
+     * Finds the reachable HCU portal among the known gateways. Follows only
+     * same-origin redirects; never forwards credentials or cookies elsewhere.
+     */
+    private static PortalPage fetchPortalPage(Network wifi, Context context, String localIp) {
+        for (String base : gatewayBasesFor(localIp)) {
+            try {
+                String pageUrl = base + PORTAL_PAGE_PATH;
+                HttpResult page = request(wifi, context, new URL(pageUrl), "GET", null, "", null);
+
+                if (page.code >= 300 && page.code < 400 && !page.location.isEmpty()) {
+                    URL original = new URL(pageUrl);
+                    URL redirected = new URL(original, page.location);
+                    if (samePortalOrigin(original, redirected)) {
+                        pageUrl = redirected.toString();
+                        page = request(wifi, context, redirected, "GET", null, page.cookies, original.toString());
+                    }
+                }
+
+                if (page.code >= 200 && page.code < 300 && looksLikeHcuPortal(page.body)) {
+                    return new PortalPage(base, pageUrl, page);
+                }
+            } catch (Exception e) {
+                Log.d(TAG, "Portal not reachable at " + base + ": " + e.getMessage());
+            }
+        }
+        return null;
+    }
+
     public static AuthResult loginSync(Context context) {
         return loginSync(context, null, null, null);
     }
@@ -594,30 +645,19 @@ public final class HcuAuthHelper {
                         "Internet is already active (Wi-Fi IP: " + ip + ")", null, PRIMARY_GATEWAY);
             }
 
-            // Probe the fixed HCU captive-portal endpoint first. Do not send credentials
+            // Probe the known HCU captive-portal endpoints first. Do not send credentials
             // merely because an unrelated Wi-Fi network happens to use a 10.x address.
-            String base = "http://" + PRIMARY_GATEWAY + ":" + PORT;
-            String pageUrl = base + PORTAL_PAGE_PATH;
-            HttpResult page = request(wifi, context, new URL(pageUrl), "GET", null, "", null);
-
-            // Follow only same-origin redirects; never forward credentials or cookies to
-            // an unrelated host returned by a captive portal.
-            if (page.code >= 300 && page.code < 400 && !page.location.isEmpty()) {
-                URL original = new URL(pageUrl);
-                URL redirected = new URL(original, page.location);
-                if (samePortalOrigin(original, redirected)) {
-                    pageUrl = redirected.toString();
-                    page = request(wifi, context, redirected, "GET", null, page.cookies, original.toString());
-                }
-            }
-
-            if (page.code < 200 || page.code >= 300 || !looksLikeHcuPortal(page.body)) {
+            PortalPage portal = fetchPortalPage(wifi, context, ip);
+            if (portal == null) {
                 return new AuthResult(AuthResult.Status.NOT_IN_HCU_SUBNET,
                         "This Wi-Fi does not expose the HCU login portal. No credentials were sent.",
-                        "Portal probe: HTTP " + page.code + ", expected HCU/Sophos login page.",
-                        PRIMARY_GATEWAY);
+                        "Portal probe: no HCU/Sophos login page on the known gateways.",
+                        PRIMARY_GATEWAY + "," + FALLBACK_GATEWAY);
             }
 
+            String base = portal.base;
+            String pageUrl = portal.pageUrl;
+            HttpResult page = portal.http;
             String cookies = page.cookies;
             String loginPath = chooseLoginPath(page.body, pageUrl);
             URL pageUri = new URL(pageUrl);
@@ -625,7 +665,7 @@ public final class HcuAuthHelper {
             if (!samePortalOrigin(pageUri, loginUrl)) {
                 return new AuthResult(AuthResult.Status.ERROR,
                         "Portal supplied an unexpected login destination; credentials were not sent.",
-                        null, PRIMARY_GATEWAY);
+                        null, base);
             }
 
             String form = "mode=191"
@@ -650,18 +690,18 @@ public final class HcuAuthHelper {
             } else if ("CHALLENGE".equalsIgnoreCase(status)) {
                 return new AuthResult(AuthResult.Status.ERROR,
                         "Portal requested a challenge but did not return its state token.",
-                        "HTTP " + login.code + "; status=CHALLENGE", PRIMARY_GATEWAY);
+                        "HTTP " + login.code + "; status=CHALLENGE", base);
             }
 
             if (looksLikeInvalidCredentials(login.body) || "AUTH_FAILED".equalsIgnoreCase(status)
                     || "FAILED".equalsIgnoreCase(status)) {
                 return new AuthResult(AuthResult.Status.INVALID_CREDENTIALS,
                         "HCU portal rejected the saved credentials. Check them in the app.",
-                        "HTTP " + login.code + "; status=" + status + "; " + message, PRIMARY_GATEWAY);
+                        "HTTP " + login.code + "; status=" + status + "; " + message, base);
             }
             if (isQuotaExceeded(login.body)) {
                 return new AuthResult(AuthResult.Status.ERROR, "HCU portal reports a data quota limit",
-                        "HTTP " + login.code + "; " + message, PRIMARY_GATEWAY);
+                        "HTTP " + login.code + "; " + message, base);
             }
 
             // A portal XML status is not proof of Internet access. Confirm the Wi-Fi path
@@ -688,19 +728,19 @@ public final class HcuAuthHelper {
                 reportOnlineToAndroid(context, wifi);
                 return new AuthResult(AuthResult.Status.SUCCESS,
                         "HCU sign-in complete; Internet access verified (IP: " + ip + ")",
-                        diagnostic, PRIMARY_GATEWAY);
+                        diagnostic, base);
             }
 
             return new AuthResult(AuthResult.Status.ERROR,
                     "The portal accepted a request, but Android could not verify Internet access. " + diagnostic,
-                    diagnostic, PRIMARY_GATEWAY);
+                    diagnostic, base);
 
         } catch (Exception e) {
             Log.w(TAG, "HCU authentication failed: " + e.getMessage());
             return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
                     "HCU portal is not reachable yet: "
                             + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()),
-                    null, PRIMARY_GATEWAY);
+                    null, PRIMARY_GATEWAY + "," + FALLBACK_GATEWAY);
         } finally {
             IS_AUTHENTICATING.set(false);
         }
@@ -717,19 +757,24 @@ public final class HcuAuthHelper {
         if (username.isEmpty()) {
             return new AuthResult(AuthResult.Status.ERROR, "No saved username is available for logout", null, PRIMARY_GATEWAY);
         }
-        try {
-            String body = "mode=192"
-                    + "&username=" + URLEncoder.encode(username, "UTF-8")
-                    + "&a=" + System.currentTimeMillis()
-                    + "&producttype=0";
-            String url = "http://" + PRIMARY_GATEWAY + ":" + PORT + AUTH_PATH;
-            HttpResult result = request(network, context, new URL(url), "POST", body, "", url);
-            return new AuthResult(AuthResult.Status.SUCCESS, "Logout request sent (HTTP " + result.code + ")",
-                    result.body, PRIMARY_GATEWAY);
-        } catch (Exception e) {
-            return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
-                    "Logout request failed: " + e.getMessage(), null, PRIMARY_GATEWAY);
+        String ip = getLocalWifiIpAddress(context, network);
+        String lastError = null;
+        for (String base : gatewayBasesFor(ip)) {
+            try {
+                String body = "mode=192"
+                        + "&username=" + URLEncoder.encode(username, "UTF-8")
+                        + "&a=" + System.currentTimeMillis()
+                        + "&producttype=0";
+                String url = base + AUTH_PATH;
+                HttpResult result = request(network, context, new URL(url), "POST", body, "", url);
+                return new AuthResult(AuthResult.Status.SUCCESS, "Logout request sent (HTTP " + result.code + ")",
+                        result.body, base);
+            } catch (Exception e) {
+                lastError = e.getMessage();
+            }
         }
+        return new AuthResult(AuthResult.Status.GATEWAY_UNREACHABLE,
+                "Logout request failed: " + lastError, null, PRIMARY_GATEWAY + "," + FALLBACK_GATEWAY);
     }
 
     public static void loginAsync(Context context, AuthCallback callback) {

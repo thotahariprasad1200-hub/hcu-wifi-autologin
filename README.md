@@ -1,15 +1,21 @@
 # HCU Wi-Fi Auto-Login for Android
 
-Version **1.5.0** is an event-driven automatic sign-in build for the University of Hyderabad campus captive portal.
+Version **1.7.0** makes automatic sign-in survive the app being killed in the background, and probes both known HCU portal gateways.
 
 ## Intended behavior
 
 1. Android chooses and connects to a Wi-Fi network already saved on the phone. The app does not turn Wi-Fi on, choose an SSID, or scan for SSIDs.
-2. The app listens for Wi-Fi network, link-property, and captive-portal capability changes.
+2. The app listens for Wi-Fi network, link-property, and captive-portal capability changes. OS-scheduled watchdog jobs re-check the connection even if the app process was killed.
 3. If Android already marks that Wi-Fi network as validated, the app does nothing.
 4. Otherwise, the app probes the known HCU portal at `http://192.168.56.2:8090/httpclient.html` over that exact Wi-Fi network.
 5. Credentials are sent only if the response looks like the HCU/Sophos/Cyberoam login page. A normal `10.x.x.x` address by itself is not treated as proof that the network is HCU.
 6. The app submits the saved credentials to the Sophos-style `/login.xml` endpoint, handles a returned `CHALLENGE` state, and verifies Internet access over the same Wi-Fi network before reporting success.
+
+## Background reliability changes in 1.7.0
+
+- Adds OS-held `JobScheduler` watchdog jobs that survive the app process being killed by Android or Realme battery management: a network-triggered job wakes the app when any network connects, a periodic job re-checks the session every 15 minutes (Android's minimum), and a one-shot job re-arms the listener if the app is swiped away. Each job can complete the portal sign-in by itself, even when the foreground service is not running.
+- Adds a one-tap "Allow" system dialog (battery-optimization exemption) from the background-settings button so Realme/Android stops killing the app.
+- Probes both known campus portal gateways (`192.168.56.2` and `10.4.0.1`), ordered by the subnet the phone actually joined. Earlier builds only tried `192.168.56.2`, so buildings that issue `10.4.x.x` addresses could never sign in.
 
 ## Reliability and battery changes in 1.5.0
 

@@ -79,6 +79,8 @@ public class MainActivity extends Activity {
             HcuForegroundService.start(this);
             appendLog("Zero-intervention background service active.");
         }
+        // OS-held watchdog jobs survive process kills and wake the app on Wi-Fi connect.
+        HcuWatchdogJobService.scheduleAll(this);
 
         appendLog("Hari Auto Login started on " + Build.MANUFACTURER + " " + Build.MODEL);
 
@@ -138,6 +140,18 @@ public class MainActivity extends Activity {
 
         // Realme Background Settings shortcut
         btnRealmeSettings.setOnClickListener(v -> {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            boolean exempt = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+            if (!exempt) {
+                // One-tap system dialog: "Allow" stops Android/Realme from killing the app.
+                try {
+                    Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    intent.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(intent);
+                    Toast.makeText(this, "Tap ALLOW so background auto-login can keep running", Toast.LENGTH_LONG).show();
+                    return;
+                } catch (Exception ignored) {}
+            }
             try {
                 Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
                 intent.setData(Uri.parse("package:" + getPackageName()));

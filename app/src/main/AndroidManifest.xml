@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Lets the app ask the user once to exclude it from battery killing -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="false"
@@ -44,6 +46,12 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Event-driven monitoring of user-selected saved Wi-Fi networks to complete the HCU captive-portal sign-in when the network connects." />
         </service>
+
+        <!-- OS-held watchdog jobs: survive process death, wake the app on network connect -->
+        <service
+            android:name=".HcuWatchdogJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
 
         <!-- Quick Settings Tile for 1-Tap Login from Notification Shade -->
         <service

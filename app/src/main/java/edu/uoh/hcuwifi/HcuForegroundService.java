@@ -86,15 +86,25 @@ public class HcuForegroundService extends Service {
         registerWifiCallback();
         registerWifiBroadcastReceiver();
         startSessionWatchdog();
+        HcuWatchdogJobService.scheduleAll(this);
         Log.i(TAG, "Zero-touch HCU Wi-Fi monitor started.");
     }
 
     private void startAsForeground() {
         Notification notification = buildNotification("Waiting for HCU Wi-Fi");
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-        } else {
-            startForeground(NOTIF_ID, notification);
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(NOTIF_ID, notification);
+            }
+        } catch (Exception e) {
+            // A restricted start context (e.g. boot on newer Android) must not kill the service.
+            try {
+                startForeground(NOTIF_ID, notification);
+            } catch (Exception inner) {
+                Log.e(TAG, "Could not enter foreground state", inner);
+            }
         }
     }
 
@@ -444,6 +454,13 @@ public class HcuForegroundService extends Service {
         }
         scheduler.shutdownNow();
         super.onDestroy();
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        // The user swiped the app away. The OS-held job re-arms this listener.
+        HcuWatchdogJobService.scheduleRestart(this);
+        super.onTaskRemoved(rootIntent);
     }
 
     @Override

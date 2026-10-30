@@ -27,6 +27,8 @@ public class BootReceiver extends BroadcastReceiver {
             if (autoLogin) {
                 Log.d(TAG, "Boot/update detected, starting HCU Wi-Fi service");
                 HcuForegroundService.start(context);
+                // OS-held jobs are the reliable path; the service is best effort here.
+                HcuWatchdogJobService.scheduleAll(context);
             }
         }
     }
