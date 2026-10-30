@@ -333,7 +333,7 @@ public class HcuForegroundService extends Service {
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) builder.setSilent(true);
+        builder.setSound(null).setVibrate(new long[0]).setLights(0, 0, 0);
         return builder.build();
     }
 
