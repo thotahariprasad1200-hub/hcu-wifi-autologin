@@ -256,8 +256,8 @@ public class MainActivity extends Activity {
                 updateStatusDisplay(false, "HCU Subnet Detected - Login Required", ip);
                 appendLog("[Status] Offline on HCU Wi-Fi (IP: " + ip + "). Ready to login.");
             } else {
-                updateStatusDisplay(false, "Not in HCU Subnet (" + ip + ")", ip);
-                appendLog("[Status] Offline / Non-HCU IP: " + ip);
+                updateStatusDisplay(false, "Wi-Fi connected — portal check runs in background", ip);
+                appendLog("[Status] Wi-Fi is not validated yet. The background monitor checks the HCU portal before sending credentials.");
             }
         });
     }
