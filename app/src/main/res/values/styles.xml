@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Base application theme using pure Android Material without androidx -->
     <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:colorPrimary">@color/primary</item>
         <item name="android:colorPrimaryDark">@color/primary_dark</item>
         <item name="android:colorAccent">@color/accent</item>
         <item name="android:windowBackground">@color/bg_main</item>
-        <item name="android:statusBarColor">@color/primary_dark</item>
+        <item name="android:statusBarColor">@color/bg_main</item>
+        <item name="android:navigationBarColor">@color/bg_main</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:fontFamily">sans</item>
     </style>
 </resources>
