@@ -384,8 +384,12 @@ public class HcuForegroundService extends Service {
     }
 
     private void startSessionWatchdog() {
+        HcuAuthHelper.getPrefs(this)
+                .edit().putLong("service_last_alive", System.currentTimeMillis()).apply();
         scheduler.scheduleWithFixedDelay(() -> {
             try {
+                HcuAuthHelper.getPrefs(this)
+                        .edit().putLong("service_last_alive", System.currentTimeMillis()).apply();
                 Network network = currentWifiNetwork;
                 if (network != null && isCurrentNetwork(network, networkGeneration.get())
                         && !hasInternet(network)) {
@@ -394,7 +398,7 @@ public class HcuForegroundService extends Service {
             } catch (Exception e) {
                 Log.w(TAG, "Session watchdog failed", e);
             }
-        }, 5, 5, TimeUnit.MINUTES);
+        }, 1, 1, TimeUnit.MINUTES);
     }
 
     private void createNotificationChannel() {

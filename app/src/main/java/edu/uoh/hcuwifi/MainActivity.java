@@ -83,6 +83,13 @@ public class MainActivity extends Activity {
         HcuWatchdogJobService.scheduleAll(this);
 
         appendLog("Hari Auto Login started on " + Build.MANUFACTURER + " " + Build.MODEL);
+        logBackgroundHealth();
+
+        // Ask once per install for the battery exemption; ColorOS kills the app without it.
+        if (!getSharedPreferences("hcu_setup", MODE_PRIVATE).getBoolean("battery_asked", false)) {
+            getSharedPreferences("hcu_setup", MODE_PRIVATE).edit().putBoolean("battery_asked", true).apply();
+            requestBatteryExemption();
+        }
 
         HcuAuthHelper.bindToWifi(this);
         refreshStatus();
@@ -138,29 +145,31 @@ public class MainActivity extends Activity {
         layoutLogHeader.setOnClickListener(toggleLogListener);
         tvToggleLog.setOnClickListener(toggleLogListener);
 
-        // Realme Background Settings shortcut
+        // Realme background-unblocking shortcut: battery dialog -> Auto-launch -> app details
         btnRealmeSettings.setOnClickListener(v -> {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             boolean exempt = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
             if (!exempt) {
-                // One-tap system dialog: "Allow" stops Android/Realme from killing the app.
+                requestBatteryExemption();
+                return;
+            }
+            if (openAutostartSettings()) {
+                Toast.makeText(this,
+                        "Turn ON Auto-launch for Hari Auto Login, then also set Battery to 'No restrictions' and lock the app in Recent apps",
+                        Toast.LENGTH_LONG).show();
+            } else {
                 try {
-                    Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
                     intent.setData(Uri.parse("package:" + getPackageName()));
                     startActivity(intent);
-                    Toast.makeText(this, "Tap ALLOW so background auto-login can keep running", Toast.LENGTH_LONG).show();
-                    return;
-                } catch (Exception ignored) {}
-            }
-            try {
-                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                intent.setData(Uri.parse("package:" + getPackageName()));
-                startActivity(intent);
-                Toast.makeText(this, "Set Battery to 'Unrestricted' and enable 'Allow background activity'", Toast.LENGTH_LONG).show();
-            } catch (Exception e) {
-                try {
-                    startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
-                } catch (Exception ignored) {}
+                    Toast.makeText(this,
+                            "Set Battery to 'No restrictions', enable 'Allow background activity', and lock the app in Recent apps",
+                            Toast.LENGTH_LONG).show();
+                } catch (Exception e) {
+                    try {
+                        startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                    } catch (Exception ignored) {}
+                }
             }
         });
 
@@ -258,6 +267,55 @@ public class MainActivity extends Activity {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
             } catch (Exception ignored) {}
         }
+    }
+
+    private void requestBatteryExemption() {
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        boolean exempt = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+        if (exempt) return;
+        try {
+            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+            Toast.makeText(this, "Tap ALLOW so background auto-login can keep running", Toast.LENGTH_LONG).show();
+        } catch (Exception ignored) {}
+    }
+
+    /** Best-effort deep link into ColorOS/realme UI Auto-launch (startup) management. */
+    private boolean openAutostartSettings() {
+        String[][] candidates = {
+                {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"},
+                {"com.coloros.safecenter", "com.coloros.safecenter.permission.startupapp.StartupAppListActivity"},
+                {"com.oplus.safecenter", "com.oplus.safecenter.startupapp.StartupAppListActivity"},
+                {"com.coloros.phonemanager", "com.coloros.phonemanager.startupapp.StartupAppListActivity"},
+        };
+        for (String[] candidate : candidates) {
+            try {
+                Intent intent = new Intent();
+                intent.setComponent(new android.content.ComponentName(candidate[0], candidate[1]));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+                return true;
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    /** Shows whether background machinery is actually waking up on this device. */
+    private void logBackgroundHealth() {
+        android.content.SharedPreferences prefs = HcuAuthHelper.getPrefs(this);
+        long lastWake = prefs.getLong("watchdog_last_run", 0L);
+        long lastAlive = prefs.getLong("service_last_alive", 0L);
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        boolean exempt = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+
+        java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("dd MMM, hh:mm a", Locale.US);
+        appendLog("[Health] Battery exemption: " + (exempt ? "ON" : "OFF - tap the settings button below"));
+        appendLog("[Health] Last background wake: "
+                + (lastWake > 0 ? fmt.format(new Date(lastWake)) + " ("
+                + prefs.getString("watchdog_last_result", "") + ")" : "never since install"));
+        appendLog("[Health] Service last alive: " + (lastAlive > 0 ? fmt.format(new Date(lastAlive)) : "never"));
     }
 
     private void refreshStatus() {

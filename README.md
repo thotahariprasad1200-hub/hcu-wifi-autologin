@@ -1,6 +1,20 @@
 # HCU Wi-Fi Auto-Login for Android
 
-Version **1.7.0** makes automatic sign-in survive the app being killed in the background, and probes both known HCU portal gateways.
+Version **1.7.1** hardens background sign-in for ColorOS / realme UI and adds on-device background-health diagnostics.
+
+## ColorOS / realme UI background blockers (fixed or guided in 1.7.1)
+
+Realme UI can stop every standard background mechanism unless the app is explicitly allowed: it kills the listener service, defers or drops scheduled jobs for killed apps, blocks the boot receiver until "Auto-launch" is enabled, and a swipe-away from Recent apps can force-stop the app (which cancels jobs and alarms). Version 1.7.1:
+
+- Upgrades the network-triggered watchdog job to an **expedited job** (Android 12+): near-instant execution and far more resistant to standby deferral.
+- Re-arms the watchdog jobs from every app component that runs, so any wake re-establishes all safety nets.
+- Shows **background health on the home screen**: battery-exemption state, last background wake time and result, and when the listener service was last alive. If background execution is being blocked, the screen says so instead of failing silently.
+- Asks for the battery-optimization exemption automatically on first launch, and the settings button now deep-links into the ColorOS/realme UI **Auto-launch** manager (with fallback instructions).
+- Listener service heartbeat every minute (was 5), so expired HCU sessions are retried faster while the app is alive.
+
+**Required one-time phone setup for guaranteed background login (Realme):** (1) tap ALLOW on the battery dialog the app shows, (2) enable **Auto-launch** for the app (settings button deep-links there), (3) lock the app in Recent apps. Without these, ColorOS can still freeze the app between wakes.
+
+Version **1.7.0** made automatic sign-in survive the app being killed in the background, and probes both known HCU portal gateways.
 
 ## Intended behavior
 

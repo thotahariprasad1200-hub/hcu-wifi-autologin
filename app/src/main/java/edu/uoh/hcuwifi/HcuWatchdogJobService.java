@@ -6,7 +6,9 @@ import android.app.job.JobScheduler;
 import android.app.job.JobService;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.net.Network;
+import android.os.Build;
 import android.util.Log;
 
 /**
@@ -60,11 +62,15 @@ public class HcuWatchdogJobService extends JobService {
     }
 
     private static JobInfo buildNetworkJob(Context context) {
-        return new JobInfo.Builder(JOB_ID_NETWORK,
+        JobInfo.Builder builder = new JobInfo.Builder(JOB_ID_NETWORK,
                 new ComponentName(context, HcuWatchdogJobService.class))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                .setPersisted(true)
-                .build();
+                .setPersisted(true);
+        if (Build.VERSION.SDK_INT >= 31) {
+            // Expedited jobs run near-instantly and resist standby-bucket deferral.
+            builder.setExpedited(true);
+        }
+        return builder.setOverrideDeadline(60 * 1000L).build();
     }
 
     /** One-shot job used when the foreground service's task is removed. */
@@ -112,6 +118,7 @@ public class HcuWatchdogJobService extends JobService {
     }
 
     private void runCheck() {
+        recordRun("watchdog woke up in background");
         // Best effort: bring the event-driven listener back up. Whether or not
         // Android allows the background start, this job can sign in by itself.
         try {
@@ -134,6 +141,7 @@ public class HcuWatchdogJobService extends JobService {
 
         if (HcuAuthHelper.isNetworkValidated(this, wifi) || HcuAuthHelper.isOnline(wifi, this)) {
             HcuAuthHelper.reportOnlineToAndroid(this, wifi);
+            recordRun("HCU Wi-Fi already online");
             Log.d(TAG, "Watchdog: HCU Wi-Fi already online.");
             return;
         }
@@ -141,9 +149,21 @@ public class HcuWatchdogJobService extends JobService {
         Log.i(TAG, "Watchdog: HCU Wi-Fi detected without internet - signing in.");
         HcuAuthHelper.AuthResult result = HcuAuthHelper.loginSync(this, wifi);
         Log.i(TAG, "Watchdog login result: " + result);
+        recordRun("login " + result.status + ": " + result.message);
         if (result.isSuccess()) {
             HcuAuthHelper.reportOnlineToAndroid(this, wifi);
         }
+    }
+
+    /** Device-visible evidence: the app screen shows whether background wakes happen at all. */
+    private void recordRun(String what) {
+        try {
+            SharedPreferences prefs = HcuAuthHelper.getPrefs(this);
+            prefs.edit()
+                    .putLong("watchdog_last_run", System.currentTimeMillis())
+                    .putString("watchdog_last_result", what)
+                    .apply();
+        } catch (Exception ignored) {}
     }
 
     private void rescheduleNetworkJob() {
