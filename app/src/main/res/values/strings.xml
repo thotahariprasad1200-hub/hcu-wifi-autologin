@@ -25,4 +25,32 @@
     <string name="btn_probe">Check connection</string>
     <string name="log_title">Recent activity</string>
     <string name="btn_clear_log">Clear</string>
+    <string name="license_title">Unlock Hari Auto Login</string>
+    <plurals name="license_trial_left">
+        <item quantity="one">Free trial: %d day left</item>
+        <item quantity="other">Free trial: %d days left</item>
+    </plurals>
+    <string name="license_trial_ended">Your free trial has ended. Automatic login is paused.</string>
+    <string name="license_revoked">This unlock is no longer active (payment refunded).</string>
+    <string name="license_pitch">One-time payment, no subscription. Pay by UPI and automatic HCU Wi-Fi login keeps working on this phone.</string>
+    <string name="license_pay">Pay %s with UPI</string>
+    <string name="license_check">I have paid \u2014 check now</string>
+    <string name="license_restore_title">Reinstalled or new phone?</string>
+    <string name="license_restore_hint">Enter the mobile number you paid with to restore your unlock (one move per payment).</string>
+    <string name="license_phone_hint">Mobile number used for payment</string>
+    <string name="license_restore">Restore my purchase</string>
+    <string name="license_opening">Opening payment page\u2026</string>
+    <string name="license_checking">Checking\u2026</string>
+    <string name="license_waiting">Waiting for payment confirmation\u2026 this can take a minute.</string>
+    <string name="license_not_paid_yet">No payment found yet. If you just paid, tap check again in a minute.</string>
+    <string name="license_thanks">Unlocked. Thank you!</string>
+    <string name="license_no_internet">No working internet. Connect to mobile data or signed-in Wi-Fi and try again.</string>
+    <string name="license_rate_limited">Too many attempts. Please try again later.</string>
+    <string name="license_error">Something went wrong. Please try again.</string>
+    <string name="license_no_browser">Could not open the payment page. Install or enable a web browser.</string>
+    <string name="license_phone_invalid">Enter a valid 10-digit mobile number.</string>
+    <string name="license_restore_not_found">No payment found for this number.</string>
+    <string name="license_restore_limit">This payment was already moved once. Contact the developer to reset it.</string>
+    <string name="license_banner_trial">Free trial: %1$d day(s) left \u2014 tap to unlock for %2$s</string>
+    <string name="license_banner_locked">Trial ended \u2014 tap to unlock automatic login</string>
 </resources>

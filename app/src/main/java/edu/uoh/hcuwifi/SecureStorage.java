@@ -31,6 +31,7 @@ public final class SecureStorage {
     private static final String PREF_ENC_PASS = "enc_password";
     private static final String PREF_ENC_IV = "enc_iv";
     private static final String PREF_LEGACY_MIGRATED = "legacy_migrated";
+    private static final String SECRETS_PREFS = "hcu_secrets";
 
     private SecureStorage() {}
 
@@ -120,6 +121,49 @@ public final class SecureStorage {
         } catch (Exception e) {
             Log.e(TAG, "Failed to decrypt password: " + e.getMessage());
             return "";
+        }
+    }
+
+    /**
+     * Stores an arbitrary small string (used for the licence record) AES-GCM encrypted under the same
+     * Keystore key, in its own preferences file so it never interferes with the credential entries.
+     * Returns false when the Keystore is unavailable; the caller decides on a fallback.
+     */
+    public static synchronized boolean putSecret(Context context, String name, String value) {
+        if (context == null || name == null || value == null) return false;
+        try {
+            SecretKey secretKey = getOrCreateKey();
+            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+            byte[] iv = cipher.getIV();
+            byte[] cipherText = cipher.doFinal(value.getBytes(StandardCharsets.UTF_8));
+            context.getSharedPreferences(SECRETS_PREFS, Context.MODE_PRIVATE).edit()
+                    .putString(name + "_c", Base64.encodeToString(cipherText, Base64.NO_WRAP))
+                    .putString(name + "_iv", Base64.encodeToString(iv, Base64.NO_WRAP))
+                    .apply();
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Could not encrypt secret '" + name + "': " + e.getMessage());
+            return false;
+        }
+    }
+
+    /** Returns null when nothing is stored or it cannot be decrypted (for example the key was lost). */
+    public static synchronized String getSecret(Context context, String name) {
+        if (context == null || name == null) return null;
+        SharedPreferences prefs = context.getSharedPreferences(SECRETS_PREFS, Context.MODE_PRIVATE);
+        String c = prefs.getString(name + "_c", null);
+        String iv = prefs.getString(name + "_iv", null);
+        if (c == null || iv == null) return null;
+        try {
+            SecretKey secretKey = getOrCreateKey();
+            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            cipher.init(Cipher.DECRYPT_MODE, secretKey,
+                    new GCMParameterSpec(GCM_TAG_LENGTH, Base64.decode(iv, Base64.NO_WRAP)));
+            return new String(cipher.doFinal(Base64.decode(c, Base64.NO_WRAP)), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not decrypt secret '" + name + "': " + e.getMessage());
+            return null;
         }
     }
 

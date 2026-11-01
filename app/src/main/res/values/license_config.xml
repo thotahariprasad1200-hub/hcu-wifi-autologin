@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Licensing switch. Keep this false until the backend in /backend is deployed and a Razorpay
+      test-mode payment has unlocked a test install end to end. While false (or while the API base
+      below is empty) the app behaves exactly like v1.7.1: no trial clock, no unlock screen, no
+      network calls. Flipping it on starts the trial from each install's next launch.
+    -->
+    <bool name="license_enabled">false</bool>
+
+    <!-- HTTPS base URL of the deployed Worker, no trailing slash, e.g. https://wifi-autologin-license.<you>.workers.dev -->
+    <string name="license_api_base" translatable="false"></string>
+
+    <!-- Free trial length in days (PRD open decision: 3 or 4). -->
+    <integer name="license_trial_days">4</integer>
+
+    <!-- Shown only until the backend has reported the real price. -->
+    <string name="license_price_fallback">₹50</string>
+</resources>

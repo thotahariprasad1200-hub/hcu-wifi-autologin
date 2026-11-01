@@ -10,8 +10,8 @@ android {
         applicationId "edu.uoh.hcuwifi"
         minSdk 24
         targetSdk 36
-        versionCode 15
-        versionName "1.7.1"
+        versionCode 16
+        versionName "1.8.0"
 
         testInstrumentationRunner "android.test.InstrumentationTestRunner"
     }
@@ -47,4 +47,6 @@ android {
 dependencies {
     // Ultra-lightweight: ZERO external dependencies (no androidx, no third-party libs)
     // Pure Android framework APIs + Keystore for sub-50 KB APK footprint!
+    // Test-only dependency: never packaged into the APK.
+    testImplementation 'junit:junit:4.13.2'
 }

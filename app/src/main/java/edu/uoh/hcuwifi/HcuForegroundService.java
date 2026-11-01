@@ -283,6 +283,12 @@ public class HcuForegroundService extends Service {
                 return;
             }
 
+            if (result.status == HcuAuthHelper.AuthResult.Status.LICENSE_REQUIRED) {
+                updateNotification("Free trial ended \u2014 tap to unlock automatic login");
+                finishLoginFlow(generation);
+                return;
+            }
+
             if (result.status == HcuAuthHelper.AuthResult.Status.INVALID_CREDENTIALS) {
                 updateNotification("HCU rejected saved credentials — check username/password");
                 finishLoginFlow(generation);

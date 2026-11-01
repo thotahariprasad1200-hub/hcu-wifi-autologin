@@ -39,6 +39,18 @@ jobs:
       - name: Install Android 36 platform and build tools
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Set up Node 22 for backend tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Backend tests
+        working-directory: backend
+        run: npm test
+
+      - name: Android unit tests
+        run: gradle testDebugUnitTest --stacktrace
+
       - name: Build release APK
         run: gradle clean assembleRelease --stacktrace
 

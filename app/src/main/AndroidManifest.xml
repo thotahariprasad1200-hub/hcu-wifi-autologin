@@ -36,6 +36,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".LicenseActivity"
+            android:exported="false"
+            android:label="@string/license_title" />
+
         <!-- Permanent Zero-Intervention Background Monitor -->
         <service
             android:name=".HcuForegroundService"

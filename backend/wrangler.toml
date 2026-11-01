@@ -1,0 +1,14 @@
+name = "wifi-autologin-license"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# Non-secret settings only. Secrets (Razorpay keys, webhook secret, admin secret) are set with
+# `wrangler secret put <NAME>` and never appear in this file or in git.
+[vars]
+PRICE_PAISE = "5000"                       # 5000 paise = Rs 50. The app shows whatever /status reports.
+PRODUCT_DESCRIPTION = "Wi-Fi Auto-Login - one-time unlock"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wifi-licenses"
+database_id = "REPLACE_WITH_ID_PRINTED_BY_wrangler_d1_create"

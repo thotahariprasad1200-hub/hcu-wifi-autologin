@@ -52,6 +52,7 @@ public class MainActivity extends Activity {
     private LinearLayout layoutLogHeader;
     private TextView tvToggleLog;
     private Button btnRealmeSettings;
+    private TextView tvLicenseBanner;
 
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -98,8 +99,27 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        updateLicenseBanner();
+        LicenseManager.refreshIfDue(this);
         HcuAuthHelper.bindToWifi(this);
         refreshStatus();
+    }
+
+    private void updateLicenseBanner() {
+        if (!LicenseManager.isEnabled(this)) {
+            tvLicenseBanner.setVisibility(View.GONE);
+            return;
+        }
+        LicenseLogic.State state = LicenseManager.state(this);
+        if (state == LicenseLogic.State.UNLOCKED) {
+            tvLicenseBanner.setVisibility(View.GONE);
+            return;
+        }
+        tvLicenseBanner.setText(state == LicenseLogic.State.TRIAL
+                ? getString(R.string.license_banner_trial, LicenseManager.daysLeft(this), LicenseManager.priceLabel(this))
+                : getString(R.string.license_banner_locked));
+        tvLicenseBanner.setVisibility(View.VISIBLE);
+        tvLicenseBanner.setOnClickListener(v -> startActivity(new Intent(this, LicenseActivity.class)));
     }
 
     private void bindViews() {
@@ -121,6 +141,7 @@ public class MainActivity extends Activity {
         layoutLogHeader = findViewById(R.id.layout_log_header);
         tvToggleLog = findViewById(R.id.tv_toggle_log);
         btnRealmeSettings = findViewById(R.id.btn_realme_settings);
+        tvLicenseBanner = findViewById(R.id.tv_license_banner);
     }
 
     private void loadSavedPreferences() {

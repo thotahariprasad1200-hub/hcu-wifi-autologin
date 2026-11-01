@@ -78,6 +78,7 @@ public final class HcuAuthHelper {
             GATEWAY_UNREACHABLE,
             NOT_IN_HCU_SUBNET,
             BUSY,
+            LICENSE_REQUIRED,
             ERROR
         }
 
@@ -616,6 +617,10 @@ public final class HcuAuthHelper {
     public static AuthResult loginSync(Context context, Network network, String customUsername, String customPassword) {
         if (context == null) {
             return new AuthResult(AuthResult.Status.ERROR, "App context is unavailable", null, null);
+        }
+        if (!LicenseManager.canRun(context)) {
+            return new AuthResult(AuthResult.Status.LICENSE_REQUIRED,
+                    "Free trial ended. Open the app to unlock automatic login.", null, null);
         }
         if (!IS_AUTHENTICATING.compareAndSet(false, true)) {
             return new AuthResult(AuthResult.Status.BUSY, "Authentication already in progress", null, null);
